@@ -18,7 +18,7 @@ import (
 )
 
 type Config struct {
-	Listen, DataDir           string
+	Listen, Domain, DataDir   string
 	Device                    ipa.DeviceConfig
 	AppleEmail, ApplePassword string
 	JobTimeout, Retention     time.Duration
@@ -43,8 +43,29 @@ func Parse(get func(string) string) (Config, error) {
 	}
 	ip := net.ParseIP(host)
 	p, e := strconv.Atoi(port)
-	if e != nil || p < 1 || p > 65535 || ip == nil || (!ip.IsLoopback() && !ip.IsPrivate()) {
-		return c, errors.New("IPA_NOW_LISTEN must use a loopback or private IP")
+	if e != nil || p < 1 || p > 65535 || ip == nil {
+		return c, errors.New("IPA_NOW_LISTEN must be an IP address and port")
+	}
+	c.Domain = strings.ToLower(val("DOMAIN", ""))
+	if c.Domain == "" && !ip.IsLoopback() && !ip.IsPrivate() {
+		return c, errors.New("IPA_NOW_LISTEN must use a loopback or private IP unless IPA_NOW_DOMAIN is configured")
+	}
+	if c.Domain != "" {
+		domainHost := c.Domain
+		if strings.Contains(c.Domain, ":") {
+			var domainPort string
+			domainHost, domainPort, e = net.SplitHostPort(c.Domain)
+			if e != nil {
+				return c, errors.New("IPA_NOW_DOMAIN must be a hostname with an optional port")
+			}
+			p, e = strconv.Atoi(domainPort)
+			if e != nil || p < 1 || p > 65535 {
+				return c, errors.New("invalid IPA_NOW_DOMAIN port")
+			}
+		}
+		if domainHost != strings.TrimSpace(domainHost) || strings.HasSuffix(domainHost, ".") || net.ParseIP(domainHost) != nil || !validHostname(domainHost) {
+			return c, errors.New("IPA_NOW_DOMAIN must be a hostname with an optional port")
+		}
 	}
 	c.DataDir, e = filepath.Abs(val("DATA_DIR", "./data"))
 	if e != nil {

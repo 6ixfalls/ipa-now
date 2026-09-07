@@ -33,7 +33,9 @@ make build
 ./bin/ipa-now
 ```
 
-Open [the local workspace](http://127.0.0.1:8080). If the listen IP changes, open that exact configured address; the server validates the Host header. Public and wildcard listen addresses are rejected. Backend secrets and paths are never included in the React bundle.
+Open [the local workspace](http://127.0.0.1:8080). Without `IPA_NOW_DOMAIN`, the listen IP must remain loopback or private and its exact address is the only accepted `Host`. Backend secrets and paths are never included in the React bundle.
+
+For access through a reverse proxy, set `IPA_NOW_DOMAIN` to the external HTTPS hostname, optionally including a nonstandard port (for example, `ipa.example.com` or `ipa.example.com:8443`). You may then set `IPA_NOW_LISTEN` to the proxy-reachable socket, including `0.0.0.0:8080`. The configured domain becomes the only accepted `Host` and HTTPS mutation origin; forwarded-host and forwarded-protocol headers are deliberately ignored. The proxy must preserve the original `Host`, terminate TLS, require authentication and authorization, apply request/body and rate limits, and keep the backend socket inaccessible to untrusted clients. This setting is not authentication and does not make direct public exposure safe.
 
 Use `chmod 600` on the dedicated SSH key and known-hosts file. The data directory is created with mode `0700`; an existing directory with broader permissions is rejected. Run the process as a dedicated unprivileged OS user. Never share a device with another ipa-now instance, upstream CLI, or decryption service, even if each service uses a different data directory.
 
@@ -144,7 +146,7 @@ docker build --tag ipa-now:local .
 
 The final Alpine 3.23 image runs as UID/GID `10001:10001`, includes CA certificates and the musl/C++ runtime, and contains no Node/Go build tools. `.dockerignore` limits the build context to source and lockfiles. Credentials are supplied only at runtime. The Go builder also uses Alpine 3.23 with CGO enabled for SQLite; the pinned ipadecrypt fork selects musl-compatible Unicorn libraries on Linux amd64/arm64.
 
-The documented topology uses **Linux Docker Engine with host networking**. The server deliberately binds to `127.0.0.1:8080` and validates that exact Host header; ordinary bridge networking with `-p` will not expose a loopback-only container listener. Host networking preserves those checks and needs no `-p`. Other Docker environments require working host-network support; see [Docker's host-network documentation](https://docs.docker.com/engine/network/drivers/host/).
+The default documented topology uses **Linux Docker Engine with host networking**. The server binds to `127.0.0.1:8080` and validates that exact Host header; ordinary bridge networking with `-p` will not expose a loopback-only container listener. Host networking preserves those defaults and needs no `-p`. Other Docker environments require working host-network support; see [Docker's host-network documentation](https://docs.docker.com/engine/network/drivers/host/). A separately secured reverse-proxy deployment can instead set `IPA_NOW_DOMAIN` and a proxy-reachable `IPA_NOW_LISTEN` as described above.
 
 Prepare a private runtime environment file using `.env.example`. For Docker `--env-file`, use literal `NAME=value` lines without shell `export` or shell quoting. Set `IPA_NOW_KNOWN_HOSTS_PATH=/run/ipa-now/known_hosts` and, for key authentication, `IPA_NOW_SSH_KEY_PATH=/run/ipa-now/id_ed25519`. The host credential directory and files must be readable by UID 10001, with files mode `0600`; verify and enroll the device host key before starting the container.
 

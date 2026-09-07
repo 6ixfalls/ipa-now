@@ -65,11 +65,17 @@ func run() error {
 	if err = runner.Recover(); err != nil {
 		return errors.New("startup reconciliation failed; inspect the private data directory")
 	}
-	api := &httpapi.Server{Jobs: store, Files: files, Auth: auth, MaxUpload: c.MaxUpload, QueueLimit: c.QueueLimit, AppleEnabled: c.AppleEmail != "", Resolve: runner.Resolve, UI: web.Handler(), AllowedHosts: []string{c.Listen}}
+	allowedHost := c.Listen
+	allowedOrigin := "http://" + c.Listen
+	if c.Domain != "" {
+		allowedHost = c.Domain
+		allowedOrigin = "https://" + c.Domain
+	}
+	api := &httpapi.Server{Jobs: store, Files: files, Auth: auth, MaxUpload: c.MaxUpload, QueueLimit: c.QueueLimit, AppleEnabled: c.AppleEmail != "", Resolve: runner.Resolve, UI: web.Handler(), AllowedHosts: []string{allowedHost}, AllowedOrigin: allowedOrigin}
 	srv := &http.Server{Addr: c.Listen, Handler: api.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Minute, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	listener, err := net.Listen("tcp", c.Listen)
 	if err != nil {
-		return errors.New("unable to bind the configured private listen address")
+		return errors.New("unable to bind the configured listen address")
 	}
 	defer listener.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -78,7 +84,7 @@ func run() error {
 	go func() { workerDone <- scheduler.Run(ctx, store, runner) }()
 	serverDone := make(chan error, 1)
 	go func() { serverDone <- srv.Serve(listener) }()
-	log.Print("ipa-now ready on configured private listen address")
+	log.Print("ipa-now ready on configured listen address")
 	workerStopped := false
 	select {
 	case <-ctx.Done():

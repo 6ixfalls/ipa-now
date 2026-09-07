@@ -1,8 +1,8 @@
 # HTTP API v1
 
-The browser and backend communicate only through `/api`. All responses and downloads are private to the trusted deployment. There is no authentication. Requests from unsupported Host headers or cross-origin mutations are rejected; this is not an authorization system.
+The browser and backend communicate only through `/api`. All responses and downloads are private to the trusted deployment. There is no application authentication. Requests from unsupported Host headers or cross-origin mutations are rejected; this is not an authorization system. When `IPA_NOW_DOMAIN` is set, its HTTPS hostname (and optional port) is the only accepted Host and mutation origin, regardless of the backend's HTTP listen address. Reverse proxies must preserve `Host`; `Forwarded` and `X-Forwarded-*` headers are not trusted.
 
-Every mutation requires `X-IPA-Now: 1`. JSON mutations require `Content-Type: application/json`, accept at most 4096 bytes, reject unknown fields and trailing JSON, and use the exact origin of the configured listen address. Errors have shape `{"code":"stable_code","message":"safe text"}`. No library error causes, credentials, host paths, device output, or raw callback attributes are returned.
+Every mutation requires `X-IPA-Now: 1`. JSON mutations require `Content-Type: application/json`, accept at most 4096 bytes, reject unknown fields and trailing JSON, and use the exact origin of the configured service address (`https://IPA_NOW_DOMAIN` when configured, otherwise `http://IPA_NOW_LISTEN`). Errors have shape `{"code":"stable_code","message":"safe text"}`. No library error causes, credentials, host paths, device output, or raw callback attributes are returned.
 
 | Method and route | Contract |
 | --- | --- |

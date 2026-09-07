@@ -19,16 +19,17 @@ import (
 )
 
 type Server struct {
-	AllowedHosts []string
-	Jobs         *jobs.Store
-	Files        *storage.Store
-	Auth         *secrets.Broker
-	MaxUpload    int64
-	QueueLimit   int
-	AppleEnabled bool
-	Resolve      func(string) error
-	UI           http.Handler
-	uploadMu     sync.Mutex
+	AllowedHosts  []string
+	AllowedOrigin string
+	Jobs          *jobs.Store
+	Files         *storage.Store
+	Auth          *secrets.Broker
+	MaxUpload     int64
+	QueueLimit    int
+	AppleEnabled  bool
+	Resolve       func(string) error
+	UI            http.Handler
+	uploadMu      sync.Mutex
 }
 
 func (s *Server) Handler() http.Handler {
@@ -63,7 +64,7 @@ func (s *Server) Handler() http.Handler {
 				}
 			}
 			if !allowed {
-				problem(w, 403, "host_denied", "Use the configured private listen address.")
+				problem(w, 403, "host_denied", "Use the configured service address.")
 				return
 			}
 		}
@@ -82,11 +83,15 @@ func (s *Server) Handler() http.Handler {
 			}
 			if origin := r.Header.Get("Origin"); origin != "" {
 				u, e := url.Parse(origin)
-				scheme := "http"
-				if r.TLS != nil {
-					scheme = "https"
+				expected := s.AllowedOrigin
+				if expected == "" {
+					scheme := "http"
+					if r.TLS != nil {
+						scheme = "https"
+					}
+					expected = scheme + "://" + r.Host
 				}
-				if e != nil || u.Host != r.Host || u.Scheme != scheme {
+				if e != nil || u.String() != expected {
 					problem(w, 403, "origin_denied", "Cross-origin requests are not allowed.")
 					return
 				}

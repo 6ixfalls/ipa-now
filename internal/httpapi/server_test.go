@@ -182,6 +182,39 @@ func TestInputAndOriginBoundaries(t *testing.T) {
 		}
 	}
 }
+
+func TestReverseProxyHostAndOriginBoundaries(t *testing.T) {
+	h, s, _, _ := harness(t)
+	s.AllowedHosts = []string{"ipa.example.com"}
+	s.AllowedOrigin = "https://ipa.example.com"
+
+	r := httptest.NewRequest("POST", "http://ipa.example.com/api/jobs", strings.NewReader(`{"target":"com.example.app","source":"installed","entitled":true}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("X-IPA-Now", "1")
+	r.Header.Set("Origin", "https://ipa.example.com")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != 202 {
+		t.Fatalf("proxy HTTPS origin rejected: %d %s", rec.Code, rec.Body.String())
+	}
+
+	for _, tc := range []struct {
+		host, origin string
+	}{
+		{"evil.example", "https://ipa.example.com"},
+		{"ipa.example.com", "http://ipa.example.com"},
+		{"ipa.example.com", "https://ipa.example.com.evil"},
+	} {
+		r = httptest.NewRequest("POST", "http://"+tc.host+"/api/jobs", strings.NewReader(`{}`))
+		r.Header.Set("X-IPA-Now", "1")
+		r.Header.Set("Origin", tc.origin)
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		if rec.Code != 403 {
+			t.Fatalf("unsafe proxy request accepted for host %q origin %q: %d", tc.host, tc.origin, rec.Code)
+		}
+	}
+}
 func TestUploadValidationSizeAndCleanup(t *testing.T) {
 	h, s, _, _ := harness(t)
 	for _, test := range []struct {

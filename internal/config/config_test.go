@@ -28,10 +28,10 @@ func TestValidation(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if c.Listen != "127.0.0.1:8080" || c.Device.AcceptNewHostKey {
+	if c.Listen != "127.0.0.1:8080" || c.Domain != "" || c.Device.AcceptNewHostKey {
 		t.Fatal("unsafe defaults")
 	}
-	for k, v := range map[string]string{"LISTEN": "0.0.0.0:8080", "DEVICE_PORT": "70000", "DEVICE_HOST": "host; command", "DEVICE_USER": "user && command", "JOB_TIMEOUT": "0s", "MAX_UPLOAD_BYTES": "-1", "ARTIFACT_RETENTION": "forever", "QUEUE_LIMIT": "0", "MAX_ATTEMPTS": "999", "APPLE_EMAIL": "bad address"} {
+	for k, v := range map[string]string{"LISTEN": "0.0.0.0:8080", "DOMAIN": "https://ipa.example.com/path", "DEVICE_PORT": "70000", "DEVICE_HOST": "host; command", "DEVICE_USER": "user && command", "JOB_TIMEOUT": "0s", "MAX_UPLOAD_BYTES": "-1", "ARTIFACT_RETENTION": "forever", "QUEUE_LIMIT": "0", "MAX_ATTEMPTS": "999", "APPLE_EMAIL": "bad address"} {
 		t.Run(k, func(t *testing.T) {
 			key := "IPA_NOW_" + k
 			old := base[key]
@@ -42,6 +42,14 @@ func TestValidation(t *testing.T) {
 			}
 		})
 	}
+	base["IPA_NOW_LISTEN"] = "0.0.0.0:8080"
+	base["IPA_NOW_DOMAIN"] = "IPA.Example.com:8443"
+	c, e = Parse(get)
+	if e != nil || c.Domain != "ipa.example.com:8443" {
+		t.Fatalf("reverse-proxy configuration rejected: %+v, %v", c, e)
+	}
+	delete(base, "IPA_NOW_LISTEN")
+	delete(base, "IPA_NOW_DOMAIN")
 	base["IPA_NOW_DEVICE_HOST"] = "invalid:hostname"
 	if _, e = Parse(get); e == nil {
 		t.Fatal("malformed hostname accepted")
