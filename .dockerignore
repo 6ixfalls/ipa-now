@@ -1,0 +1,25 @@
+# Allow only build inputs; never send local secrets or job data to the builder.
+**
+!Dockerfile
+!.dockerignore
+!go.mod
+!go.sum
+!cmd/
+!cmd/**
+!internal/
+!internal/**
+!web/
+!web/**
+web/node_modules
+web/dist
+web/.pnpm-store
+web/*.tsbuildinfo
+internal/web/dist
+**/.env
+**/.env.*
+**/*.ipa
+**/*.db
+**/*.db-*
+**/*.pem
+**/*.key
+**/known_hosts

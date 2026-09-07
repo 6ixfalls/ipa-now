@@ -133,3 +133,35 @@ Biome is pinned as a pnpm development dependency and configured in `web/biome.js
 ## AI Disclaimer
 
 This application has been developed with the assistance of AI tools. While the maintainer has reviewed all code for correctness and reliability, users are encouraged to exercise caution and perform their own testing when using the application. The maintainer does not assume responsibility for any issues that may arise from the use of this software.
+
+## Docker server
+
+Build from the repository root; the image builds React with pinned pnpm and embeds it in a CGO-enabled Go binary:
+
+```sh
+docker build --tag ipa-now:local .
+```
+
+The final Alpine 3.23 image runs as UID/GID `10001:10001`, includes CA certificates and the musl/C++ runtime, and contains no Node/Go build tools. `.dockerignore` limits the build context to source and lockfiles. Credentials are supplied only at runtime. The Go builder also uses Alpine 3.23 with CGO enabled for SQLite; the pinned ipadecrypt fork selects musl-compatible Unicorn libraries on Linux amd64/arm64.
+
+The documented topology uses **Linux Docker Engine with host networking**. The server deliberately binds to `127.0.0.1:8080` and validates that exact Host header; ordinary bridge networking with `-p` will not expose a loopback-only container listener. Host networking preserves those checks and needs no `-p`. Other Docker environments require working host-network support; see [Docker's host-network documentation](https://docs.docker.com/engine/network/drivers/host/).
+
+Prepare a private runtime environment file using `.env.example`. For Docker `--env-file`, use literal `NAME=value` lines without shell `export` or shell quoting. Set `IPA_NOW_KNOWN_HOSTS_PATH=/run/ipa-now/known_hosts` and, for key authentication, `IPA_NOW_SSH_KEY_PATH=/run/ipa-now/id_ed25519`. The host credential directory and files must be readable by UID 10001, with files mode `0600`; verify and enroll the device host key before starting the container.
+
+```sh
+docker volume create ipa-now-data
+docker run --detach --name ipa-now \
+  --network host \
+  --env-file /absolute/private/path/ipa-now.env \
+  --env IPA_NOW_DATA_DIR=/var/lib/ipa-now \
+  --env IPA_NOW_LISTEN=127.0.0.1:8080 \
+  --mount type=volume,source=ipa-now-data,target=/var/lib/ipa-now \
+  --mount type=bind,source=/absolute/private/path/device-credentials,target=/run/ipa-now,readonly \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --stop-timeout 30 \
+  ipa-now:local
+```
+
+A fresh named volume inherits the image directory's ownership and mode. Existing volumes or bind-mounted data directories must be owned by UID/GID 10001 and have mode `0700`. The data volume retains SQLite, inputs, artifacts, account sessions, private temporary files, and the engine's runtime cache. Do not mount it with `noexec`: the library loads runtime dependencies from that cache. One container may own a data directory and device at a time.
+
+Open [the local workspace](http://127.0.0.1:8080). Stop with `docker stop --time 30 ipa-now` so cancellation and cleanup can run before termination. The existing device-cleanup review gate still applies. No device credentials or real-device jobs are needed to build the image.
