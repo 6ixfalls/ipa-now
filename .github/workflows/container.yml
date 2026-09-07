@@ -1,0 +1,180 @@
+name: Container
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: container-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  # Fork pull requests receive a read-only token. They are built and verified,
+  # but only branches, tags, and pull requests from this repository can push.
+  PUSH_IMAGE: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Repository checks
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Read Node version from web/package.json
+        id: node-version
+        run: echo "version=$(jq -r .engines.node web/package.json)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.node-version.outputs.version }}
+
+      - name: Enable pinned pnpm
+        working-directory: web
+        run: corepack enable && corepack prepare --activate
+
+      - name: Set up dependencies
+        run: make setup
+
+      - name: Run checks
+        run: make check
+
+  version:
+    name: Calculate release version
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      current: ${{ steps.svu.outputs.current }}
+      next: ${{ steps.svu.outputs.next }}
+      release: ${{ steps.svu.outputs.release }}
+      version: ${{ steps.svu.outputs.version }}
+
+    steps:
+      - name: Check out repository history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Calculate semantic version
+        id: svu
+        uses: docker://ghcr.io/caarlos0/svu:3.4.1
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: safe.directory
+          GIT_CONFIG_VALUE_0: /github/workspace
+        with:
+          entrypoint: /bin/sh
+          args: /github/workspace/.github/scripts/svu-version.sh
+
+  build:
+    name: Build and publish
+    needs:
+      - checks
+      - version
+    if: ${{ always() && needs.checks.result == 'success' && (needs.version.result == 'success' || needs.version.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        if: env.PUSH_IMAGE == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image metadata
+        id: metadata
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: latest=false
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=${{ needs.version.outputs.version || '0.0.0' }},enable=${{ needs.version.outputs.release == 'true' }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and publish image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ env.PUSH_IMAGE == 'true' }}
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          annotations: ${{ steps.metadata.outputs.annotations }}
+          cache-from: type=gha,scope=app-container
+          cache-to: type=gha,mode=max,scope=app-container
+          provenance: ${{ env.PUSH_IMAGE == 'true' && 'mode=max' || 'false' }}
+          sbom: ${{ env.PUSH_IMAGE == 'true' }}
+
+  release:
+    name: Create GitHub release
+    needs:
+      - version
+      - build
+    if: ${{ needs.build.result == 'success' && needs.version.outputs.release == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Generate release notes
+        uses: orhun/git-cliff-action@v4
+        with:
+          version: v2.13.1
+          config: cliff.toml
+          args: --unreleased --offline --tag ${{ needs.version.outputs.next }}
+        env:
+          OUTPUT: release-notes.md
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.version.outputs.next }}
+        run: |
+          gh release create "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "${RELEASE_TAG}" \
+            --notes-file release-notes.md

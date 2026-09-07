@@ -1,0 +1,55 @@
+# Release-note configuration for git-cliff.
+# Version selection remains in SVU; this file controls how Conventional
+# Commits are grouped and rendered in each GitHub release.
+
+[remote.github]
+owner = "6ixfalls"
+repo = "ipa-now"
+
+[changelog]
+header = ""
+body = """
+{% macro remote_url() -%}
+https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}
+{%- endmacro -%}
+{% macro print_commit(commit) -%}
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{% if commit.breaking %}**Breaking:** {% endif %}{{ commit.message | upper_first }} ([`{{ commit.id | truncate(length=7, end="") }}`]({{ self::remote_url() }}/commit/{{ commit.id }}))
+{% endmacro -%}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | trim | upper_first }}
+{% for commit in commits | filter(attribute="scope") | sort(attribute="scope") %}
+{{ self::print_commit(commit=commit) }}
+{%- endfor %}
+{% for commit in commits %}
+{%- if not commit.scope %}
+{{ self::print_commit(commit=commit) }}
+{%- endif %}
+{% endfor -%}
+{% endfor -%}
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+commit_parsers = [
+  { message = "^feat", group = "Features" },
+  { message = "^fix", group = "Bug fixes" },
+  { message = "^perf", group = "Performance" },
+  { message = "^security", group = "Security" },
+  { message = "^refactor", group = "Refactoring" },
+  { message = "^docs?", group = "Documentation" },
+  { message = "^test", group = "Tests" },
+  { message = "^build", group = "Build system" },
+  { message = "^ci", group = "Continuous integration" },
+  { message = "^chore", group = "Maintenance" },
+  { message = "^revert", group = "Reverts" },
+  { message = "^style", group = "Styling" },
+  { message = ".*", group = "Other changes" },
+]
+protect_breaking_commits = true
+filter_commits = false
+tag_pattern = "v[0-9]+\\.[0-9]+\\.[0-9]+"
+sort_commits = "newest"

@@ -1,0 +1,10 @@
+# Conventional Commits determine patch, minor, and major releases.
+tag:
+  pattern: ""
+  prefix: "v"
+  mode: all
+
+# Keep this early-stage application in the 0.x release line until a deliberate
+# v1.0.0 tag is created.
+v0: true
+always: false
