@@ -101,7 +101,7 @@ Pin the ipadecrypt module version. Review its public API and security changes de
 
 ## Development workflow
 
-The exact Go libraries, React framework/build tooling, persistence layer, and commands have not been selected yet. When scaffolding the project:
+The implementation uses Go 1.26.5, SQLite through GORM, and React/TypeScript with Vite and pnpm. Preserve these scaffolding requirements when extending the project:
 
 - Add the canonical setup, development, formatting, lint, test, migration, build, and end-to-end commands to this file and the README in the same change.
 - Prefer reproducible, non-interactive commands suitable for local development and CI.
@@ -137,3 +137,34 @@ Do not weaken verification or security behavior merely to make a test pass. Add 
 - Schema and job-payload changes must be backward compatible or include a migration and recovery story for queued/running jobs.
 - Dependency changes require reviewing release notes and running the full available test suite, with extra scrutiny for ipadecrypt, SSH, archive, HTTP, and storage dependencies.
 - Explain any new externally reachable endpoint, secret, filesystem write, subprocess, device command, or long-lived goroutine/task in the change summary.
+
+
+## Selected implementation (2026-09-06)
+
+- Persistence is SQLite (WAL, FULL synchronous commits) through GORM v1.31.1 and the GORM SQLite v1.6.0 driver. CGO and a C compiler are required. The initial schema is version 1; migrations run transactionally at startup and newer schemas are rejected.
+- React/TypeScript uses Vite 8, Node 22.15.0, and pnpm 11.24.0 with `web/pnpm-lock.yaml`. Production assets embed in the Go binary. Do not add a frontend server framework or external queue. This single local process is sufficient for one device and supports a simple private deployment on Linux/macOS.
+- Device ownership is a transactional singleton lease plus a process-lifetime OS file lock on the private data directory. Recovery runs before new claims. Do not expire this lease under a live worker; do not point independent data directories/processes at the same device.
+- The pinned fork is `v0.0.0-20260906200042-fbe5e07bbc71`. Its public API suppresses staging removal errors and lacks a complete resource manifest/recovery method. Real runs therefore remain `cleaning` with device quarantine until an operator explicitly confirms cleanup. Never remove this review gate merely because `Decrypt` returns nil. See `docs/ipadecrypt.md` for reviewed gaps and the operator flow.
+- The public package's context-free HTTP requests are bridged through a process-startup `JobTransport` bound to the exclusive active job. Its OS temporary files are isolated by setting process `TMPDIR` to the private data root's `tmp` directory. These are documented compatibility bridges; replace them with public injection points when the fork supports them.
+- Encrypted inputs, workspaces, and failed outputs are removed during cleanup and recovery. Verified outputs expire after `IPA_NOW_ARTIFACT_RETENTION`, including waiting for cleanup confirmation. Secret sessions live separately with private permissions. Safe job metadata is retained; API history is bounded to the newest 200 rows.
+- All runtime settings use `IPA_NOW_`; `.env.example` documents every supported variable. The app does not implicitly load dotenv files. Browser configuration includes only safe operational status returned through `/api`.
+
+### Canonical commands
+
+- Setup: `make setup` (Go modules and frozen pnpm install).
+- Development: `make dev` and `make dev-web` in separate terminals.
+- Formatting: `make fmt` (gofmt and Biome); verification: `make fmt-check`.
+- Static analysis: `make lint` (format checks, go vet, Biome recommended lint/import checks with warnings treated as errors, and TypeScript).
+- Tests: `make test` (race-enabled Go tests and React/Vitest).
+- Hardware-free end-to-end: `make e2e` (HTTP, SQLite, worker, cleanup, download).
+- Build: `make build`; frontend only: `make frontend`.
+- Full required checks: `make check`.
+- Migration procedure: `make migrate`; schema initialization/migrations execute transactionally on startup under the data lock. Stop the service and back up the entire private data directory before upgrades.
+- Explicit hardware integration: `make test-device`, with `IPA_NOW_INTEGRATION_TARGET` and normal device configuration. It uses an installed app, retains a review job, and does not automatically attest remote cleanup. Never run against a busy device. Start the service afterward to finish cleanup review.
+
+
+### Frontend module boundaries
+
+Use Biome (pinned in `web/package.json`, configured in `web/biome.json`) for frontend linting, formatting, and import organization. Keep TypeScript type-checking as a separate required check. Do not replace Biome with a type-check-only lint script.
+
+Keep `web/src/App.tsx` focused on composition and shared selection/filter state. Put focused UI components in `components/{layout,workspace,requests,jobs,ui}`, asynchronous lifecycle and feedback in `hooks`, endpoint calls and response handling in `api`, API contracts in `types`, and pure shared logic in `utils`. Form fields, 2FA codes, and cleanup confirmations belong to their owning form components. Keep raw `fetch` calls out of components and do not merge these responsibilities back into a monolithic App.

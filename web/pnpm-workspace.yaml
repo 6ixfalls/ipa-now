@@ -1,0 +1,7 @@
+packages:
+  - '.'
+allowBuilds:
+  esbuild: true
+
+# Setup is explicit and frozen in CI; do not reinstall during build/test.
+verifyDepsBeforeRun: false

@@ -1,0 +1,16 @@
+/data/
+.env
+.env.*
+!.env.example
+*.ipa
+*.db
+*.db-*
+/node_modules/
+/web/node_modules/
+/web/dist/
+/bin/
+/internal/web/dist/*
+!/internal/web/dist/.gitkeep
+
+.pnpm-store/
+*.tsbuildinfo
