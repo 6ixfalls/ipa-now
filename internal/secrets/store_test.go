@@ -13,8 +13,8 @@ import (
 func TestSecretRoundTripAndMemoryChallenge(t *testing.T) {
 	root := t.TempDir()
 	os.Mkdir(filepath.Join(root, "secrets"), 0700)
-	s := New(root, "test@example.test", "password-never-on-disk")
-	if e := s.Save(context.Background(), ipa.AppleAccount{Email: "test@example.test", Password: "password-never-on-disk", PasswordToken: "opaque-token"}); e != nil {
+	s := New(root, "test@example.test", "password-never-on-disk", "02:00:00:00:00:01")
+	if e := s.Save(context.Background(), ipa.AppleAccount{Email: "test@example.test", Password: "password-never-on-disk", PasswordToken: "opaque-token", MACAddress: "02:00:00:00:00:01"}); e != nil {
 		t.Fatal(e)
 	}
 	b, _ := os.ReadFile(s.path)
@@ -22,7 +22,7 @@ func TestSecretRoundTripAndMemoryChallenge(t *testing.T) {
 		t.Fatal("password persisted")
 	}
 	a, e := s.Load()
-	if e != nil || a.PasswordToken != "opaque-token" || a.Password != "password-never-on-disk" {
+	if e != nil || a.PasswordToken != "opaque-token" || a.Password != "password-never-on-disk" || a.MACAddress != "02:00:00:00:00:01" {
 		t.Fatal("account roundtrip failed")
 	}
 	i, _ := os.Stat(s.path)
@@ -51,5 +51,21 @@ func TestSecretRoundTripAndMemoryChallenge(t *testing.T) {
 	}
 	if broker.Pending() != "" {
 		t.Fatal("challenge retained")
+	}
+}
+
+func TestMACAddressChangeInvalidatesSavedToken(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "secrets"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	old := New(root, "test@example.test", "password", "02:00:00:00:00:01")
+	if err := old.Save(context.Background(), ipa.AppleAccount{Email: "test@example.test", PasswordToken: "old-token", MACAddress: "02:00:00:00:00:01"}); err != nil {
+		t.Fatal(err)
+	}
+	updated := New(root, "test@example.test", "password", "02:00:00:00:00:02")
+	account, err := updated.Load()
+	if err != nil || account.PasswordToken != "" || account.MACAddress != "02:00:00:00:00:02" {
+		t.Fatalf("stale identity retained: %+v, %v", account, err)
 	}
 }

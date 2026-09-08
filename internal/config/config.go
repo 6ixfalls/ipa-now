@@ -19,14 +19,14 @@ import (
 )
 
 type Config struct {
-	Listen, Domain, DataDir   string
-	LogLevel                  slog.Level
-	LogFormat                 string
-	Device                    ipa.DeviceConfig
-	AppleEmail, ApplePassword string
-	JobTimeout, Retention     time.Duration
-	MaxUpload                 int64
-	QueueLimit, MaxAttempts   int
+	Listen, Domain, DataDir                    string
+	LogLevel                                   slog.Level
+	LogFormat                                  string
+	Device                                     ipa.DeviceConfig
+	AppleEmail, ApplePassword, AppleMACAddress string
+	JobTimeout, Retention                      time.Duration
+	MaxUpload                                  int64
+	QueueLimit, MaxAttempts                    int
 }
 
 func Load() (Config, error) { return Parse(os.Getenv) }
@@ -133,12 +133,20 @@ func Parse(get func(string) string) (Config, error) {
 
 	c.AppleEmail = val("APPLE_EMAIL", "")
 	c.ApplePassword = val("APPLE_PASSWORD", "")
+	c.AppleMACAddress = val("APPLE_MAC_ADDRESS", "")
 	if c.AppleEmail != "" {
 		if address, err := mail.ParseAddress(c.AppleEmail); err != nil || address.Address != c.AppleEmail || len(c.AppleEmail) > 254 {
 			return c, errors.New("invalid IPA_NOW_APPLE_EMAIL")
 		}
-	} else if c.ApplePassword != "" {
-		return c, errors.New("IPA_NOW_APPLE_EMAIL is required with a password")
+	} else if c.ApplePassword != "" || c.AppleMACAddress != "" {
+		return c, errors.New("IPA_NOW_APPLE_EMAIL is required with Apple account settings")
+	}
+	if c.AppleMACAddress != "" {
+		mac, err := net.ParseMAC(strings.TrimSpace(c.AppleMACAddress))
+		if err != nil || len(mac) != 6 {
+			return c, errors.New("IPA_NOW_APPLE_MAC_ADDRESS must be a six-byte MAC address")
+		}
+		c.AppleMACAddress = mac.String()
 	}
 	c.JobTimeout, e = time.ParseDuration(val("JOB_TIMEOUT", "30m"))
 	if e != nil || c.JobTimeout < time.Second || c.JobTimeout > 24*time.Hour {

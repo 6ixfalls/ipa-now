@@ -54,7 +54,7 @@ func run() error {
 	}
 	defer store.Close()
 	store.Log = log
-	secretStore := secrets.New(files.Root, c.AppleEmail, c.ApplePassword)
+	secretStore := secrets.New(files.Root, c.AppleEmail, c.ApplePassword, c.AppleMACAddress)
 	if _, err = secretStore.Load(); err != nil {
 		return errors.New("unable to load the configured Apple account")
 	}
@@ -64,7 +64,7 @@ func run() error {
 	base.TLSHandshakeTimeout = 10 * time.Second
 	transport := &engine.JobTransport{Base: base}
 	http.DefaultTransport = transport
-	adapter := &engine.Adapter{Device: c.Device, Secrets: secretStore, Auth: auth, Transport: transport, Log: log}
+	adapter := &engine.Adapter{Operations: store, JournalDir: filepath.Join(files.Root, "device-journal"), Device: c.Device, Secrets: secretStore, Auth: auth, Transport: transport, Log: log}
 	runner := &worker.Worker{Jobs: store, Files: files, Engine: adapter, Timeout: c.JobTimeout, Retention: c.Retention, MaxAttempts: c.MaxAttempts, Log: log}
 	if err = runner.Recover(); err != nil {
 		return errors.New("startup reconciliation failed; inspect the private data directory")
@@ -99,7 +99,7 @@ func run() error {
 		stop()
 	}
 	log.Info("service shutting down")
-	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdown, cancel := context.WithTimeout(context.Background(), 75*time.Second)
 	defer cancel()
 	if shutdownErr := srv.Shutdown(shutdown); shutdownErr != nil {
 		log.Error("HTTP shutdown deadline exceeded; restart requires reconciliation", "detail", logging.Chain(shutdownErr))

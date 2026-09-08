@@ -61,3 +61,11 @@ type Device struct {
 	Quarantined bool   `json:"cleanupRequired"`
 	Reason      string `json:"reason,omitempty"`
 }
+
+// Operation maps a durable library attempt to its job. It is never API data.
+// Retain these records and their journals with job metadata for crash recovery.
+type Operation struct {
+	ID        string `gorm:"primaryKey;size:32"`
+	JobID     string `gorm:"index;not null"`
+	CreatedAt time.Time
+}

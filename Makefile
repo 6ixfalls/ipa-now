@@ -44,7 +44,7 @@ build: frontend
 check: lint test e2e build
 
 migrate:
-	@echo 'Schema v1 is migrated transactionally on startup under the data-directory lock. Back up data while the service is stopped, then run make dev.'
+	@echo 'Schema v2 is migrated transactionally on startup under the data-directory lock. Back up data while the service is stopped, then run make dev.'
 
 test-device:
 	go test -tags integration ./internal/worker -run '^TestRealDevice$$' -count=1 -v

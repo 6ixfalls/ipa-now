@@ -32,7 +32,7 @@ func TestValidation(t *testing.T) {
 	if c.Listen != "127.0.0.1:8080" || c.Domain != "" || c.Device.AcceptNewHostKey || c.LogLevel != slog.LevelInfo || c.LogFormat != "text" {
 		t.Fatal("unsafe defaults")
 	}
-	for k, v := range map[string]string{"LISTEN": "0.0.0.0:8080", "DOMAIN": "https://ipa.example.com/path", "DEVICE_PORT": "70000", "DEVICE_HOST": "host; command", "DEVICE_USER": "user && command", "JOB_TIMEOUT": "0s", "MAX_UPLOAD_BYTES": "-1", "ARTIFACT_RETENTION": "forever", "QUEUE_LIMIT": "0", "MAX_ATTEMPTS": "999", "APPLE_EMAIL": "bad address", "LOG_LEVEL": "verbose", "LOG_FORMAT": "xml"} {
+	for k, v := range map[string]string{"LISTEN": "0.0.0.0:8080", "DOMAIN": "https://ipa.example.com/path", "DEVICE_PORT": "70000", "DEVICE_HOST": "host; command", "DEVICE_USER": "user && command", "JOB_TIMEOUT": "0s", "MAX_UPLOAD_BYTES": "-1", "ARTIFACT_RETENTION": "forever", "QUEUE_LIMIT": "0", "MAX_ATTEMPTS": "999", "APPLE_EMAIL": "bad address", "APPLE_MAC_ADDRESS": "not-a-mac", "LOG_LEVEL": "verbose", "LOG_FORMAT": "xml"} {
 		t.Run(k, func(t *testing.T) {
 			key := "IPA_NOW_" + k
 			old := base[key]
@@ -59,6 +59,14 @@ func TestValidation(t *testing.T) {
 	}
 	delete(base, "IPA_NOW_LOG_LEVEL")
 	delete(base, "IPA_NOW_LOG_FORMAT")
+	base["IPA_NOW_APPLE_EMAIL"] = "operator@example.test"
+	base["IPA_NOW_APPLE_MAC_ADDRESS"] = "02-00-00-00-00-01"
+	c, e = Parse(get)
+	if e != nil || c.AppleMACAddress != "02:00:00:00:00:01" {
+		t.Fatalf("fixed App Store MAC rejected: %+v, %v", c, e)
+	}
+	delete(base, "IPA_NOW_APPLE_EMAIL")
+	delete(base, "IPA_NOW_APPLE_MAC_ADDRESS")
 	base["IPA_NOW_DEVICE_HOST"] = "invalid:hostname"
 	if _, e = Parse(get); e == nil {
 		t.Fatal("malformed hostname accepted")

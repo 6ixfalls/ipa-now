@@ -16,8 +16,8 @@ import (
 	"testing"
 )
 
-// Explicitly operates on the configured device and retains a cleanup-review job.
-// Run the service afterward with the same data directory to finish that review.
+// Explicitly operates on the configured device and verifies automatic cleanup.
+// On failure, retain the job/journal for recovery and operator inspection.
 func TestRealDevice(t *testing.T) {
 	target := os.Getenv("IPA_NOW_INTEGRATION_TARGET")
 	if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*(\.[A-Za-z0-9][A-Za-z0-9-]*)+$`).MatchString(target) {
@@ -42,7 +42,7 @@ func TestRealDevice(t *testing.T) {
 	old := http.DefaultTransport
 	http.DefaultTransport = transport
 	defer func() { http.DefaultTransport = old }()
-	adapter := &engine.Adapter{Device: c.Device, Secrets: secrets.New(files.Root, "", ""), Auth: &secrets.Broker{}, Transport: transport}
+	adapter := &engine.Adapter{Operations: store, JournalDir: filepath.Join(files.Root, "device-journal"), Device: c.Device, Secrets: secrets.New(files.Root, "", "", ""), Auth: &secrets.Broker{}, Transport: transport}
 	w := &Worker{Jobs: store, Files: files, Engine: adapter, Timeout: c.JobTimeout, Retention: c.Retention, MaxAttempts: 1}
 	if e = w.Recover(); e != nil {
 		t.Fatal(e)
@@ -68,8 +68,8 @@ func TestRealDevice(t *testing.T) {
 		t.Fatal("worker failed; restart service and inspect cleanup")
 	}
 	got, e := store.Get(j.ID)
-	if e != nil || got.State != jobs.Cleaning || got.PendingState != jobs.Completed {
+	if e != nil || got.State != jobs.Completed {
 		t.Fatal("decryption did not produce a verified artifact; inspect the job through the UI")
 	}
-	t.Log("Verified IPA retained; start the service and explicitly confirm device cleanup before download.")
+	t.Log("Verified IPA retained; device cleanup automatically confirmed. The installed app was preserved.")
 }

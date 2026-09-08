@@ -38,13 +38,36 @@ type Engine interface {
 	Decrypt(context.Context, Request) (Result, error)
 	Verify(string) error
 }
+
+// Cleaner is an optional capability. Implementations must durably journal device
+// mutation intent before execution, keyed by job ID, outside the disposable job
+// workspace. Cleanup must work after restart and be idempotent. Missing, legacy,
+// corrupt or ambiguous ownership records must never produce Confirmed=true.
+// Credentials and remote paths stay inside the implementation, not in job data.
+type Cleaner interface {
+	Cleanup(context.Context, string) (CleanupResult, error)
+}
+
+type CleanupResult struct {
+	// Confirmed means all job-owned resources are gone, the helper has stopped,
+	// and the recorded uninstall/preservation policy has been verified.
+	Confirmed   bool
+	Uninstalled bool
+}
+type OperationStore interface {
+	StartOperation(string) (string, error)
+	Operations(string) ([]string, error)
+}
 type Adapter struct {
+	Operations  OperationStore
+	JournalDir  string
 	Transport   *JobTransport
 	Device      ipa.DeviceConfig
 	Secrets     *secrets.Store
 	Auth        *secrets.Broker
 	Log         *slog.Logger
 	DecryptFunc func(context.Context, ipa.Request) (*ipa.Result, error)
+	CleanupFunc func(context.Context, ipa.CleanupRequest) (ipa.CleanupReport, error)
 }
 
 func (a *Adapter) log() *slog.Logger { return logging.OrDiscard(a.Log) }
@@ -66,7 +89,7 @@ func (a *Adapter) Decrypt(ctx context.Context, r Request) (Result, error) {
 	}
 	if account != nil && account.PasswordToken == "" && r.Source != "installed" {
 		a.log().Info("apple account login required", "job", r.ID)
-		account, err = ipa.Login(ctx, filepath.Join(r.Workspace, "login"), account.Email, account.Password, a.authCode(r.ID))
+		account, err = ipa.LoginWithMACAddress(ctx, filepath.Join(r.Workspace, "login"), account.Email, account.Password, account.MACAddress, a.authCode(r.ID))
 		if err != nil {
 			a.log().Error("apple account login failed", "job", r.ID, "detail", logging.Chain(err))
 			return Result{}, &Failure{Code: "authentication_failed", Cause: err}
@@ -78,12 +101,19 @@ func (a *Adapter) Decrypt(ctx context.Context, r Request) (Result, error) {
 		a.log().Info("apple account login succeeded", "job", r.ID)
 	}
 	var touched atomic.Bool
+	if a.Operations == nil || !filepath.IsAbs(a.JournalDir) {
+		return Result{}, &Failure{Code: "storage_failed", Cause: errors.New("durable operation storage required")}
+	}
+	op, err := a.Operations.StartOperation(r.ID)
+	if err != nil {
+		return Result{}, &Failure{Code: "storage_failed", Cause: err}
+	}
 	call := a.DecryptFunc
 	if call == nil {
 		call = ipa.Decrypt
 	}
-	result, err := call(ctx, ipa.Request{Target: r.Target, Device: a.Device, Apple: account, StateDir: filepath.Join(r.Workspace, "state"), OutputPath: filepath.Join(r.Workspace, "output.ipa"), Source: ipa.SourcePolicy(r.Source), Uninstall: ipa.UninstallAuto, ExtraVerify: r.Source != "installed", OnAccountUpdate: a.Secrets.Save, OnAuthCode: a.authCode(r.ID), OnEvent: func(e ipa.Event) {
-		if e.Phase != ipa.PhaseConnecting {
+	result, err := call(ctx, ipa.Request{OperationID: op, JournalDir: a.JournalDir, Target: r.Target, Device: a.Device, Apple: account, StateDir: filepath.Join(r.Workspace, "state"), OutputPath: filepath.Join(r.Workspace, "output.ipa"), Source: ipa.SourcePolicy(r.Source), Uninstall: ipa.UninstallAuto, ExtraVerify: r.Source != "installed", OnAccountUpdate: a.Secrets.Save, OnAuthCode: a.authCode(r.ID), OnEvent: func(e ipa.Event) {
+		if e.Phase != ipa.PhaseConnecting && e.Phase != ipa.PhaseCleaning {
 			touched.Store(true)
 		}
 		switch e.Phase {
@@ -94,6 +124,18 @@ func (a *Adapter) Decrypt(ctx context.Context, r Request) (Result, error) {
 			r.Progress(Progress{string(e.Phase), max(e.Current, 0), max(e.Total, 0)})
 		}
 	}})
+	metadata := Result{NeedsReview: true}
+	if result != nil {
+		metadata.Installed, metadata.Replaced, metadata.Uninstalled = result.Installed, result.Reinstalled, result.Uninstalled
+	}
+	verified := result != nil && result.Verification.OK() && result.Verification.Scanned > 0 && len(result.Verification.Missing) == 0
+	// The public package returns a verified result alongside a deferred cleanup
+	// failure. Preserve it for independent verification/publication, but never
+	// release the device until the explicit Cleanup report confirms ownership.
+	if verified && errors.Is(err, ipa.ErrCleanupUnconfirmed) && ctx.Err() == nil {
+		a.log().Warn("verified output awaiting device cleanup", "job", r.ID, "detail", logging.Chain(err))
+		return metadata, nil
+	}
 	if err != nil {
 		code := "decryption_failed"
 		retry := false
@@ -107,15 +149,41 @@ func (a *Adapter) Decrypt(ctx context.Context, r Request) (Result, error) {
 			retry = true
 		}
 		a.log().Debug("classified engine failure", "job", r.ID, "code", code, "retryable", retry, "device_touched", touched.Load(), "detail", logging.Chain(err))
-		return Result{}, &Failure{Code: code, Retryable: retry, NeedsReview: touched.Load(), Cause: err}
+		return metadata, &Failure{Code: code, Retryable: retry, NeedsReview: true, Cause: err}
 	}
 	if result == nil || !result.Verification.OK() || result.Verification.Scanned == 0 || len(result.Verification.Missing) > 0 {
 		a.log().Error("engine verification rejected the output", "job", r.ID, "scanned", verificationCount(result))
-		return Result{}, &Failure{Code: "verification_failed", NeedsReview: true}
+		return metadata, &Failure{Code: "verification_failed", NeedsReview: true}
 	}
-	// The pinned API omits remote resource ownership/recovery and suppresses a
-	// staging removal error. Never infer confirmed cleanup from a nil error.
-	return Result{Installed: result.Installed, Replaced: result.Reinstalled, Uninstalled: result.Uninstalled, NeedsReview: true}, nil
+	return metadata, nil
+}
+
+func (a *Adapter) Cleanup(ctx context.Context, id string) (CleanupResult, error) {
+	if a.Operations == nil || !filepath.IsAbs(a.JournalDir) {
+		return CleanupResult{}, errors.New("durable operation storage required")
+	}
+	ops, err := a.Operations.Operations(id)
+	if err != nil {
+		return CleanupResult{}, err
+	}
+	if len(ops) == 0 {
+		return CleanupResult{}, ipa.ErrCleanupUnconfirmed
+	}
+	call := a.CleanupFunc
+	if call == nil {
+		call = ipa.Cleanup
+	}
+	result := CleanupResult{Confirmed: true}
+	for _, op := range ops {
+		if ctx.Err() != nil {
+			return CleanupResult{}, errors.Join(err, ctx.Err())
+		}
+		report, e := call(ctx, ipa.CleanupRequest{OperationID: op, JournalDir: a.JournalDir, Device: a.Device})
+		result.Confirmed = result.Confirmed && report.Confirmed && e == nil
+		result.Uninstalled = result.Uninstalled || report.Uninstalled
+		err = errors.Join(err, e)
+	}
+	return result, err
 }
 
 func (a *Adapter) authCode(id string) func(context.Context) (string, error) {

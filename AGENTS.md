@@ -74,7 +74,7 @@ Cleanup is part of job correctness, not a best-effort afterthought. A job must n
 
 ## ipadecrypt integration
 
-Use `github.com/londek/ipadecrypt/pkg/ipadecrypt` as the integration boundary. The package must be overridden to `replace github.com/londek/ipadecrypt => github.com/6ixfalls/ipadecrypt`, where the changes for implementation are located in the `fork` branch of the repository. The package currently provides `Decrypt(context.Context, Request)`, `Login`, `ParseTarget`, `AppInfo`, and `Verify`, plus structured progress events and results.
+Use `github.com/londek/ipadecrypt/pkg/ipadecrypt` as the integration boundary. The package must be overridden to `replace github.com/londek/ipadecrypt => github.com/6ixfalls/ipadecrypt`, where the changes for implementation are located in the `fork` branch of the repository. The package currently provides `Decrypt(context.Context, Request)`, `Login`, `LoginWithMACAddress`, `ParseTarget`, `AppInfo`, and `Verify`, plus structured progress events and results.
 
 When constructing a decryption request:
 
@@ -97,7 +97,7 @@ Pin the ipadecrypt module version. Review its public API and security changes de
 - Avoid logging complete request structs because they may gain secret-bearing fields over time. Use an allowlist of safe structured fields.
 - Downloads should use server-generated opaque identifiers and safe `Content-Disposition` filenames. Prevent traversal and verify that resolved paths remain inside the artifact root.
 - If a reverse proxy or public exposure is added, authentication, authorization, CSRF protection where applicable, TLS, request/body limits, rate limiting, and signed or access-checked downloads become required work—not optional hardening.
-- The upstream helper's predictable device-side temporary staging/symlink risk may remain in versions of ipadecrypt. Device isolation reduces exposure but is not a fix; track the upstream/fork status and update once the helper uses safe temporary-directory and file-opening primitives.
+- The pinned durable helper uses operation-owned private staging and exclusive/no-follow file primitives. Keep device isolation and reject uncertain process/resource ownership; legacy jobs from older forks can still require manual staging inspection.
 
 ## Development workflow
 
@@ -141,13 +141,13 @@ Do not weaken verification or security behavior merely to make a test pass. Add 
 
 ## Selected implementation (2026-09-06)
 
-- Persistence is SQLite (WAL, FULL synchronous commits) through GORM v1.31.1 and the GORM SQLite v1.6.0 driver. CGO and a C compiler are required. The initial schema is version 1; migrations run transactionally at startup and newer schemas are rejected.
+- Persistence is SQLite (WAL, FULL synchronous commits) through GORM v1.31.1 and the GORM SQLite v1.6.0 driver. CGO and a C compiler are required. The schema is version 2 (additive migration from v1 adds durable operation-to-job mappings); migrations run transactionally at startup and newer schemas are rejected.
 - React/TypeScript uses Vite 8, Node 22.15.0, and pnpm 11.24.0 with `web/pnpm-lock.yaml`. Production assets embed in the Go binary. Do not add a frontend server framework or external queue. This single local process is sufficient for one device and supports a simple private deployment on Linux/macOS.
 - Device ownership is a transactional singleton lease plus a process-lifetime OS file lock on the private data directory. Recovery runs before new claims. Do not expire this lease under a live worker; do not point independent data directories/processes at the same device.
-- The pinned fork is `v0.0.0-20260906200042-fbe5e07bbc71`. Its public API suppresses staging removal errors and lacks a complete resource manifest/recovery method. Real runs therefore remain `cleaning` with device quarantine until an operator explicitly confirms cleanup. Never remove this review gate merely because `Decrypt` returns nil. See `docs/ipadecrypt.md` for reviewed gaps and the operator flow.
+- The pinned fork is `v0.0.0-20260908101951-c1b5e837cf72`. The adapter uses durable `OperationID`/`JournalDir` and public `Cleanup`. Every attempt gets a fresh ID persisted in SQLite first; completion/retry requires explicit cleanup confirmation for all attempts. Missing legacy journals, unknown ownership or cleanup errors retain quarantine. Never infer cleanup from a nil `Decrypt` error. See `docs/ipadecrypt.md`.
 - The public package's context-free HTTP requests are bridged through a process-startup `JobTransport` bound to the exclusive active job. Its OS temporary files are isolated by setting process `TMPDIR` to the private data root's `tmp` directory. These are documented compatibility bridges; replace them with public injection points when the fork supports them.
 - Encrypted inputs, workspaces, and failed outputs are removed during cleanup and recovery. Verified outputs expire after `IPA_NOW_ARTIFACT_RETENTION`, including waiting for cleanup confirmation. Secret sessions live separately with private permissions. Safe job metadata is retained; API history is bounded to the newest 200 rows.
-- All runtime settings use `IPA_NOW_`; `.env.example` documents every supported variable. The app does not implicitly load dotenv files. Browser configuration includes only safe operational status returned through `/api`.
+- All runtime settings use `IPA_NOW_`; `.env.example` documents every supported variable. The app does not implicitly load dotenv files. `IPA_NOW_APPLE_MAC_ADDRESS` optionally pins one normalized App Store identity and invalidates a cached token when changed. Browser configuration includes only safe operational status returned through `/api`.
 
 ### Canonical commands
 
@@ -160,7 +160,7 @@ Do not weaken verification or security behavior merely to make a test pass. Add 
 - Build: `make build`; frontend only: `make frontend`.
 - Full required checks: `make check`.
 - Migration procedure: `make migrate`; schema initialization/migrations execute transactionally on startup under the data lock. Stop the service and back up the entire private data directory before upgrades.
-- Explicit hardware integration: `make test-device`, with `IPA_NOW_INTEGRATION_TARGET` and normal device configuration. It uses an installed app, retains a review job, and does not automatically attest remote cleanup. Never run against a busy device. Start the service afterward to finish cleanup review.
+- Explicit hardware integration: `make test-device`, with `IPA_NOW_INTEGRATION_TARGET` and normal device configuration. It uses an installed app and asserts automatic cleanup while preserving the preexisting app. Never run against a busy device. On failure, start the service afterward to recover or finish cleanup review.
 
 
 ### Frontend module boundaries
@@ -172,3 +172,7 @@ Keep `web/src/App.tsx` focused on composition and shared selection/filter state.
 ### Container deployment
 
 `docker build --tag ipa-now:local .` builds the server image using pinned Node/pnpm and Go stages, followed by an Alpine 3.23 musl runtime with CA certificates and libstdc++ for CGO SQLite and the decryption engine's dynamically loaded dependencies. The Go builder uses Alpine 3.23 with build-base; the pinned fork selects musl-compatible Unicorn libraries on Linux amd64/arm64. Run as UID/GID 10001 with a private persistent volume at `/var/lib/ipa-now`; runtime caches also live in that volume. Credential files are mounted read-only at runtime and excluded from the build context. The default documented Linux deployment uses host networking with the loopback listen address and exact Host validation. `IPA_NOW_DOMAIN` explicitly enables a proxy-reachable public/wildcard listen IP while pinning Host and mutation Origin checks to that external HTTPS hostname; it does not trust forwarded headers or provide authentication. See README for the required reverse-proxy controls, complete run command, and volume permissions. Validate Dockerfile changes with an image build and a hardware-free startup smoke check when Docker is available.
+
+### Automated cleanup capability
+
+The real adapter implements `engine.Cleaner` with a separate 30-second cleanup context and startup recovery under quarantine. Only explicit confirmation for every persisted attempt may release uncertain device work. Private journals live in `device-journal/` outside disposable work/input/tmp storage and are retained with job metadata and clean markers. Schema v2 adds operation ownership records; legacy active jobs without journals remain unconfirmed. `make test` includes adapter, migration, retry and cleanup regressions; canonical commands above are unchanged. Graceful shutdown allows 75 seconds for independent library and worker cleanup. See `docs/automated-cleanup.md` for recovery/retention and `docs/cleanup-fork-validation.md` for remaining device validation limits.

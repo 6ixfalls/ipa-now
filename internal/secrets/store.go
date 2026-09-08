@@ -11,12 +11,12 @@ import (
 )
 
 type Store struct {
-	mu                    sync.Mutex
-	path, email, password string
+	mu                                sync.Mutex
+	path, email, password, macAddress string
 }
 
-func New(root, email, password string) *Store {
-	return &Store{path: filepath.Join(root, "secrets", "account.json"), email: email, password: password}
+func New(root, email, password, macAddress string) *Store {
+	return &Store{path: filepath.Join(root, "secrets", "account.json"), email: email, password: password, macAddress: macAddress}
 }
 func (s *Store) Load() (*ipa.AppleAccount, error) {
 	s.mu.Lock()
@@ -24,7 +24,7 @@ func (s *Store) Load() (*ipa.AppleAccount, error) {
 	if s.email == "" {
 		return nil, nil
 	}
-	a := &ipa.AppleAccount{Email: s.email, Password: s.password}
+	a := &ipa.AppleAccount{Email: s.email, Password: s.password, MACAddress: s.macAddress}
 	if info, e := os.Lstat(s.path); e == nil {
 		if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
 			return nil, errors.New("account session must be a private regular file")
@@ -45,13 +45,20 @@ func (s *Store) Load() (*ipa.AppleAccount, error) {
 	if a.Email != s.email {
 		return nil, errors.New("saved account does not match configured email")
 	}
+	if a.MACAddress != s.macAddress {
+		// App Store tokens are tied to the machine identity. Force a fresh login
+		// rather than sending a cached token under a newly configured identity.
+		a.PasswordToken = ""
+	}
 	a.Password = s.password
+	a.MACAddress = s.macAddress
 	return a, nil
 }
 func (s *Store) Save(_ context.Context, a ipa.AppleAccount) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	a.Password = ""
+	a.MACAddress = s.macAddress
 	b, err := json.Marshal(a)
 	if err != nil {
 		return err

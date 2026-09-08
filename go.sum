@@ -1,5 +1,5 @@
-github.com/6ixfalls/ipadecrypt v0.0.0-20260906200042-fbe5e07bbc71 h1:dXn2XD8n/OnDcXizF+Io5j/TmpGzS0QsD2sKkf4gQ+I=
-github.com/6ixfalls/ipadecrypt v0.0.0-20260906200042-fbe5e07bbc71/go.mod h1:6EFfyrhvKEq+wEPYYgigHKGrXx3n84nwatQjprV2iG8=
+github.com/6ixfalls/ipadecrypt v0.0.0-20260908101951-c1b5e837cf72 h1:w2mRWxUALz7nDpocU5kzMVGOr6me8hjo+9PdlCpQTgs=
+github.com/6ixfalls/ipadecrypt v0.0.0-20260908101951-c1b5e837cf72/go.mod h1:6EFfyrhvKEq+wEPYYgigHKGrXx3n84nwatQjprV2iG8=
 github.com/andybalholm/brotli v1.2.2 h1:HzTuoo2ErYQqf5qvcJInB8uvqSVxRttzkFexPWtnceM=
 github.com/andybalholm/brotli v1.2.2/go.mod h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=
 github.com/blacktop/go-dwarf v1.0.14 h1:OjmzfSgg/qAKckn2tWFebcgKgJ7HOqCj7bS+CiE1lrY=

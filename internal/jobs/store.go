@@ -66,15 +66,15 @@ func Open(path string) (*Store, error) {
 		sql.Close()
 		return nil, err
 	}
-	if version > 1 {
+	if version > 2 {
 		sql.Close()
 		return nil, errors.New("database schema is newer than this binary")
 	}
 	if err = db.Transaction(func(tx *gorm.DB) error {
-		if e := tx.AutoMigrate(&Job{}, &Device{}); e != nil {
+		if e := tx.AutoMigrate(&Job{}, &Device{}, &Operation{}); e != nil {
 			return e
 		}
-		return tx.Exec("PRAGMA user_version = 1").Error
+		return tx.Exec("PRAGMA user_version = 2").Error
 	}); err != nil {
 		sql.Close()
 		return nil, err
@@ -190,6 +190,16 @@ func (s *Store) Quarantine(id, reason string, desired State) error {
 	})
 }
 func (s *Store) Resolve(id string) error {
+	return s.resolve(id, "operator-confirmed cleanup")
+}
+
+// ResolveAutomatic uses the same atomic terminal transition/quarantine release
+// as operator confirmation, but preserves the provenance in persisted progress.
+func (s *Store) ResolveAutomatic(id string) error {
+	return s.resolve(id, "automatically confirmed cleanup")
+}
+
+func (s *Store) resolve(id, phase string) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		var j Job
 		if err := tx.First(&j, "id = ?", id).Error; err != nil {
@@ -198,7 +208,7 @@ func (s *Store) Resolve(id string) error {
 		if j.State != Cleaning || j.CleanupError == "" || !Terminal(j.PendingState) {
 			return ErrConflict
 		}
-		if err := tx.Model(&j).Updates(map[string]any{"cleanup_error": "", "state": j.PendingState, "pending_state": "", "phase": "operator-confirmed cleanup"}).Error; err != nil {
+		if err := tx.Model(&j).Updates(map[string]any{"cleanup_error": "", "state": j.PendingState, "pending_state": "", "phase": phase}).Error; err != nil {
 			return err
 		}
 		var n int64
@@ -231,7 +241,18 @@ func (s *Store) Recover() error {
 				continue
 			}
 			s.log().Warn("job was active at shutdown; quarantined for device review", "job", j.ID, "state", string(j.State), "phase", j.Phase)
-			if err := tx.Model(&j).Updates(map[string]any{"state": Cleaning, "pending_state": Failed, "cleanup_error": "Interrupted job: inspect device resources before resuming.", "error_code": "interrupted", "error_message": "The service stopped before cleanup was confirmed.", "failure_reason": "process-recovery"}).Error; err != nil {
+			fields := map[string]any{"state": Cleaning, "cleanup_error": "Interrupted job: automatic cleanup recovery is required."}
+			if j.State != Cleaning || !Terminal(j.PendingState) {
+				desired := Failed
+				if j.CancelRequested {
+					desired = Cancelled
+				}
+				fields["pending_state"] = desired
+				fields["error_code"] = "interrupted"
+				fields["error_message"] = "The service stopped before cleanup was confirmed."
+				fields["failure_reason"] = "process-recovery"
+			}
+			if err := tx.Model(&j).Updates(fields).Error; err != nil {
 				return err
 			}
 		}
@@ -261,4 +282,30 @@ func (s *Store) BeginCleanup(id string, desired State, code, message string) (St
 		return tx.Model(&j).Updates(map[string]any{"state": Cleaning, "phase": "cleaning", "pending_state": desired, "error_code": code, "error_message": message, "failure_reason": code}).Error
 	})
 	return desired, err
+}
+
+// StartOperation commits ownership before the library can mutate the device.
+func (s *Store) StartOperation(id string) (string, error) {
+	op := Operation{ID: NewID(), JobID: id}
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var j Job
+		if err := tx.First(&j, "id = ?", id).Error; err != nil {
+			return err
+		}
+		var d Device
+		if err := tx.First(&d, 1).Error; err != nil {
+			return err
+		}
+		if j.State != Running || d.Owner != id || d.Quarantined {
+			return ErrConflict
+		}
+		return tx.Create(&op).Error
+	})
+	return op.ID, err
+}
+
+func (s *Store) Operations(id string) ([]string, error) {
+	var ids []string
+	err := s.db.Model(&Operation{}).Where("job_id = ?", id).Order("created_at ASC, id ASC").Pluck("id", &ids).Error
+	return ids, err
 }

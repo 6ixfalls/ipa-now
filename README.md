@@ -2,7 +2,7 @@
 
 A private, self-hosted workspace for decrypting iOS apps you are legally entitled to obtain and decrypt. Go runs the HTTP API, a SQLite/GORM durable queue, one device worker, and the compiled React UI in one process.
 
-**Current integration limitation:** the pinned ipadecrypt fork cannot report or recover every device-side resource. Real-device jobs pause in `cleaning` for explicit operator review, including successful decryptions. The queue remains paused and downloads remain unavailable until the operator confirms cleanup. This is intentional; a successful library return is not sufficient proof of cleanup. See [the integration review](docs/ipadecrypt.md).
+Device cleanup runs automatically after decryption and during startup recovery. Jobs complete only after the library explicitly confirms cleanup; failures or uncertain ownership quarantine the device for recovery or operator review. See [cleanup and recovery](docs/automated-cleanup.md).
 
 ## Requirements
 
@@ -25,6 +25,8 @@ cp .env.example .env
 
 Edit `.env` with your private configuration. It is ignored by Git. The app does not load dotenv files automatically. Export the configuration in your shell without printing it:
 
+For App Store requests, set `IPA_NOW_APPLE_MAC_ADDRESS` to a stable six-byte address owned by this private deployment. The same normalized identity is used for login, purchase, and download requests; changing or clearing it invalidates the saved token and requires the configured Apple password for a fresh login.
+
 ```sh
 set -a
 . ./.env
@@ -46,7 +48,7 @@ For host enrollment, obtain the SSH host public key and fingerprint through a tr
 1. Choose **Installed app**, **App Store**, or **Upload IPA**. Confirm that you are entitled to obtain and decrypt the app.
 2. Installed-app requests accept a bundle ID and preserve the installed app. App Store and upload requests additionally require acknowledgement that the build may replace an installed app and be automatically uninstalled. The previous build is not restored.
 3. Follow persisted job phases in the queue. A request survives closing the browser or disconnecting its HTTP request. Submit an Apple 2FA code in the active job's prompt if requested; codes exist only in memory for that challenge.
-4. On cancellation, timeout, failure, or success, the worker attempts cleanup. The pinned real engine requires a device review. Follow [the exact review steps](docs/ipadecrypt.md#operator-cleanup-review), then confirm cleanup in the job details.
+4. On cancellation, timeout, failure, or success, the worker attempts cleanup. If cleanup cannot be confirmed automatically, follow [the exact review steps](docs/ipadecrypt.md#operator-cleanup-review), then confirm cleanup in the job details.
 5. Download the verified IPA after the job is `completed`. The default retention is 24 hours from verification, including time waiting for cleanup review. Download links are private API routes, not permanent public URLs.
 
 A stopped or crashed job is not blindly replayed. Restart reconciles server files and quarantines uncertain device work before claiming the next job. After reviewing cleanup, failed/cancelled jobs can be requested again explicitly.
@@ -65,12 +67,12 @@ A stopped or crashed job is not blindly replayed. Restart reconciles server file
 | `make frontend` | Build React assets for embedding in Go |
 | `make build` | Build frontend and `bin/ipa-now` |
 | `make check` | Run formatting, static analysis, tests, end-to-end flows, and production build |
-| `make migrate` | Explain the startup migration procedure; schema v1 initializes transactionally on startup |
+| `make migrate` | Explain the startup migration procedure; schema v2 initializes or migrates v1 transactionally on startup |
 | `make test-device` | Explicit real-device integration test; requires `IPA_NOW_INTEGRATION_TARGET` and normal device configuration |
 
 For frontend development, run `make dev` and `make dev-web` in separate terminals, then use [Vite](http://127.0.0.1:5173). Keep the default backend address for the development proxy. It only rewrites the exact development origin; arbitrary origins are rejected.
 
-The real-device test operates on an installed app you are entitled to decrypt, keeps the durable job in the configured data directory, and leaves device cleanup confirmation to the operator. Stop the server first. Do not run it against a busy device. Start the service afterward to inspect and confirm cleanup. It is excluded from the default suite and CI.
+The real-device test operates on an installed app you are entitled to decrypt, keeps the durable job in the configured data directory, and asserts automatic cleanup confirmation. Stop the server first. Do not run it against a busy device. If the test fails, start the service afterward to attempt recovery and inspect any remaining cleanup issue. It is excluded from the default suite and CI.
 
 ## Architecture
 
@@ -116,7 +118,7 @@ Inputs stay while queued and are deleted when cleanup runs. Encrypted downloads,
 
 Artifacts are written inside the job workspace, verified, fsynced, and renamed atomically. Until server cleanup and any device review finish, the HTTP API refuses to serve them. Orphan inputs, abandoned workspaces, and artifacts not owned by an eligible job are reconciled at startup. Unknown filenames stop recovery for inspection instead of triggering broad deletion. A filesystem cleanup error also quarantines the device. Resolve filesystem access and restart, then review device cleanup before confirming.
 
-Back up the entire data directory **with the service stopped**, including its database and account session, using private/encrypted backup storage. Schema v1 is created/migrated in a transaction under the process lock. A database with a newer schema version is rejected. Future schema changes must supply explicit migrations and a recovery story; do not downgrade a database in place.
+Back up the entire data directory **with the service stopped**, including its database, device journals, and account session, using private/encrypted backup storage. Schema v2 is created/migrated in a transaction under the process lock. A database with a newer schema version is rejected. The v1→v2 migration adds private operation-to-job records; queued jobs remain runnable and legacy active jobs without journals require manual review. Do not downgrade a database in place.
 
 See [.env.example](.env.example) for every supported setting, defaults, bounds, and secret classification. See [API contract](docs/api.md) for all externally reachable routes.
 
@@ -171,4 +173,6 @@ docker run --detach --name ipa-now \
 
 A fresh named volume inherits the image directory's ownership and mode. Existing volumes or bind-mounted data directories must be owned by UID/GID 10001 and have mode `0700`. The data volume retains SQLite, inputs, artifacts, account sessions, private temporary files, and the engine's runtime cache. Do not mount it with `noexec`: the library loads runtime dependencies from that cache. One container may own a data directory and device at a time.
 
-Open [the local workspace](http://127.0.0.1:8080). Stop with `docker stop --time 30 ipa-now` so cancellation and cleanup can run before termination. The existing device-cleanup review gate still applies. No device credentials or real-device jobs are needed to build the image.
+Open [the local workspace](http://127.0.0.1:8080). Stop with `docker stop --time 90 ipa-now` so cancellation and cleanup can run before termination. Unconfirmed cleanup still quarantines the device. No device credentials or real-device jobs are needed to build the image.
+
+Device journals live in `device-journal/` beneath `IPA_NOW_DATA_DIR` (0700 directories, 0600 files). Every library attempt has a fresh opaque ID durably recorded in SQLite before execution. Journals and clean markers are retained with job metadata, including after operator confirmation; they contain device/app ownership information but no account or SSH credentials. Do not delete unresolved records or journals. Graceful shutdown allows 75 seconds for the library and worker cleanup passes; longer or forced shutdowns require startup recovery.

@@ -23,6 +23,7 @@ type Worker struct {
 	MaxAttempts        int
 	RetryDelay         time.Duration
 	Log                *slog.Logger
+	CleanupTimeout     time.Duration
 }
 
 func (w *Worker) log() *slog.Logger { return logging.OrDiscard(w.Log) }
@@ -102,7 +103,10 @@ func (w *Worker) Run(parent context.Context, j jobs.Job) (returnErr error) {
 	for attempt := 1; attempt <= w.MaxAttempts; attempt++ {
 		result, err = w.Engine.Decrypt(ctx, engine.Request{ID: j.ID, Target: target, Source: source, Workspace: workspace, Progress: emit})
 		var failure *engine.Failure
-		if err == nil || !errors.As(err, &failure) || !failure.Retryable || failure.NeedsReview || attempt == w.MaxAttempts || ctx.Err() != nil {
+		if err == nil || !errors.As(err, &failure) || !failure.Retryable || attempt == w.MaxAttempts || ctx.Err() != nil {
+			break
+		}
+		if (failure.NeedsReview || result.NeedsReview) && !w.cleanupDevice(j.ID) {
 			break
 		}
 		if e := w.Jobs.Retry(j.ID); e != nil {
@@ -211,16 +215,71 @@ func (w *Worker) finish(j jobs.Job, desired jobs.State, code string, review bool
 	if desired != jobs.Completed {
 		cleanupErr = errors.Join(cleanupErr, w.Files.Remove("artifacts", j.ID))
 	}
+	// A local removal failure must not prevent attempting independent device
+	// cleanup. Both sides must succeed before the job can become terminal.
+	if review {
+		review = !w.cleanupDevice(j.ID)
+	}
 	if cleanupErr != nil {
 		w.log().Error("server cleanup failed; device quarantined", "job", j.ID, "detail", logging.Chain(cleanupErr))
 		return w.Jobs.Quarantine(j.ID, "Server cleanup failed. Resolve filesystem access and restart before confirming cleanup.", desired)
 	}
 	if review {
 		w.log().Warn("device review required before the job can finish", "job", j.ID, "state", string(desired))
-		return w.Jobs.Quarantine(j.ID, "Inspect job-owned device staging, helper files, and installed/replaced apps; confirm cleanup before continuing.", desired)
+		return w.Jobs.Quarantine(j.ID, "Device cleanup could not be confirmed automatically. Inspect job-owned staging, helper files, and installed/replaced apps; confirm cleanup before continuing.", desired)
 	}
+	if err = w.Expire(); err != nil {
+		return err
+	}
+	current, err := w.Jobs.Get(j.ID)
+	if err != nil {
+		return err
+	}
+	desired = current.PendingState
 	w.log().Info("job finished", "job", j.ID, "state", string(desired), "duration", time.Since(started).Round(time.Millisecond).String())
 	return w.Jobs.Change(j.ID, desired, map[string]any{"phase": string(desired)})
+}
+
+// Run only after Decrypt has returned, under the active device lease or startup
+// process lock/quarantine. Cancellation of the job must not cancel its cleanup.
+// Do not race a timeout against an ongoing device operation: the implementation
+// must honor the context and return before device ownership can be released.
+func (w *Worker) cleanupDevice(id string) bool {
+	cleaner, ok := w.Engine.(engine.Cleaner)
+	if !ok {
+		w.log().Warn("automatic device cleanup unavailable", "job", id, "reason", "unsupported_engine")
+		return false
+	}
+	timeout := w.CleanupTimeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	started := time.Now()
+	w.log().Info("automatic device cleanup started", "job", id, "timeout", timeout.String())
+	result, err := cleaner.Cleanup(ctx, id)
+	duration := time.Since(started).Round(time.Millisecond).String()
+	if ctx.Err() != nil {
+		w.log().Warn("automatic device cleanup unconfirmed", "job", id, "reason", "deadline_exceeded", "duration", duration)
+		return false
+	}
+	if err != nil {
+		w.log().Error("automatic device cleanup failed", "job", id, "duration", duration, "detail", logging.Chain(err))
+		return false
+	}
+	if !result.Confirmed {
+		w.log().Warn("automatic device cleanup unconfirmed", "job", id, "reason", "incomplete_report", "duration", duration)
+		return false
+	}
+	if result.Uninstalled {
+		if err := w.Jobs.Metadata(id, map[string]any{"uninstalled": true}); err != nil {
+			w.log().Error("cleanup metadata could not be persisted", "job", id, "detail", logging.Chain(err))
+			return false
+		}
+	}
+	w.log().Info("automatic device cleanup confirmed", "job", id, "duration", duration)
+	return true
 }
 func safeMessage(code string) string {
 	switch code {
@@ -280,6 +339,17 @@ func (w *Worker) Recover() error {
 	}
 	if err = w.Expire(); err != nil {
 		return err
+	}
+	// Server reconciliation must succeed before remote recovery can release the
+	// quarantine. The engine journal must survive workspace/temp removal above.
+	for _, j := range all {
+		if j.State == jobs.Cleaning && j.CleanupError != "" && w.cleanupDevice(j.ID) {
+			if err = w.Jobs.ResolveAutomatic(j.ID); err != nil {
+				w.log().Error("automatic cleanup recovery could not be persisted", "job", j.ID, "detail", logging.Chain(err))
+				return err
+			}
+			w.log().Info("automatic cleanup recovery resolved", "job", j.ID)
+		}
 	}
 	w.log().Info("startup recovery completed")
 	return nil
