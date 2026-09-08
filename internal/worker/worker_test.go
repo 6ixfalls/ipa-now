@@ -1,10 +1,13 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -245,6 +248,36 @@ func TestQueuedCancellationSkipsEngine(t *testing.T) {
 	got, _ := w.Jobs.Get(j.ID)
 	if got.State != jobs.Cancelled {
 		t.Fatal(got)
+	}
+}
+
+func TestFailureDetailsAreLoggedRedacted(t *testing.T) {
+	w, j := setup(t)
+	var buf bytes.Buffer
+	w.Log = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	w.Engine = fakeEngine{run: func(context.Context, engine.Request) (engine.Result, error) {
+		return engine.Result{}, &engine.Failure{Code: "authentication_failed", Cause: errors.New("gsa login rejected password=hunter2 token=abc123")}
+	}}
+	if e := w.Run(context.Background(), j); e != nil {
+		t.Fatal(e)
+	}
+	got, _ := w.Jobs.Get(j.ID)
+	if got.State != jobs.Failed || got.ErrorCode != "authentication_failed" {
+		t.Fatal(got)
+	}
+	out := buf.String()
+	for _, want := range []string{"job failed", "authentication_failed", "gsa login rejected", "[redacted]", "job started"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("log output missing %q:\n%s", want, out)
+		}
+	}
+	for _, leaked := range []string{"hunter2", "abc123"} {
+		if strings.Contains(out, leaked) {
+			t.Fatalf("log output leaked credential %q:\n%s", leaked, out)
+		}
+	}
+	if got.FailureReason != "authentication_failed" {
+		t.Fatal("raw error persisted")
 	}
 }
 

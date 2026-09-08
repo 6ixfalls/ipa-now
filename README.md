@@ -77,6 +77,7 @@ The real-device test operates on an installed app you are entitled to decrypt, k
 | Package | Responsibility |
 | --- | --- |
 | `internal/config` | Parse/validate prefixed environment configuration once |
+| `internal/logging` | Process logger on stderr and bounded, redacted operator diagnostics |
 | `internal/httpapi` | Explicit JSON contract, bounded uploads, operator actions, private downloads |
 | `internal/jobs` | GORM models, SQLite transactions, monotonic transitions, cancellation intent, singleton device ownership |
 | `internal/scheduler` | Serial admission to the one configured device |
@@ -90,7 +91,11 @@ The scheduler owns a persisted device lease in SQLite and the process holds an e
 
 State transitions are `queued → running → verifying → cleaning → completed`. Failure/cancellation branches enter `cleaning` before a terminal state. Safe connection retries stay within the same `running` job and device lease, increment a persisted attempt counter, and wait with bounded exponential backoff (1, 2, 4, 8 seconds). Unknown errors, authentication errors, verification failures, and any error after device contact do not automatically retry. Accepted cancellation wins until the atomic transition to cleaning.
 
-Progress callbacks coalesce into a one-element channel and persist at most four times per second. Raw helper messages/attributes are discarded. The database stores safe phase/counter snapshots and error codes, not callback logs or secret-bearing library error strings. Typed adapter errors retain wrapped causes only in memory; durable diagnostics contain the operation/code and job ID.
+Progress callbacks coalesce into a one-element channel and persist at most four times per second. Raw helper messages/attributes are discarded. The database stores safe phase/counter snapshots and error codes, not callback logs or secret-bearing library error strings. Typed adapter errors retain wrapped causes only in memory and in redacted stderr diagnostics; durable diagnostics contain the operation/code and job ID.
+
+## Logging
+
+The server writes structured logs to stderr with `IPA_NOW_LOG_LEVEL` (`debug`, `info`, `warn`, `error`; default `info`) and `IPA_NOW_LOG_FORMAT` (`text` or `json`; default `text`). Job lifecycle, retries, failure classification, cleanup quarantines, retention, recovery, and operator actions (enqueue, upload, cancel, 2FA submission, cleanup confirmation) are logged with job IDs. Failures include a bounded, single-line chain of wrapped library causes so operator-diagnosable detail (for example why Apple account authentication failed) is never reduced to a stable code alone. Credential-like values inside diagnostics are masked, passwords/tokens/keys/2FA codes are never logged, successful polled API reads appear only at `debug`, and the configured device address is not logged.
 
 The application starts an HTTP server, one scheduler goroutine, and a bounded per-job progress/cancellation monitor. The library also owns its SSH cancellation watcher. It makes Apple HTTPS and device SSH/SFTP requests through the public package; ipa-now does not spawn the ipadecrypt CLI or import internal packages. The library uploads/runs its helper, installs/uninstalls when policy allows, and writes device staging files. See [the reviewed limitations](docs/ipadecrypt.md) before operating a device.
 

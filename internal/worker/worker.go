@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/6ixfalls/ipa-now/internal/engine"
 	"github.com/6ixfalls/ipa-now/internal/jobs"
+	"github.com/6ixfalls/ipa-now/internal/logging"
 	"github.com/6ixfalls/ipa-now/internal/storage"
 )
 
@@ -20,13 +22,18 @@ type Worker struct {
 	Timeout, Retention time.Duration
 	MaxAttempts        int
 	RetryDelay         time.Duration
+	Log                *slog.Logger
 }
 
+func (w *Worker) log() *slog.Logger { return logging.OrDiscard(w.Log) }
+
 func (w *Worker) Run(parent context.Context, j jobs.Job) (returnErr error) {
+	started := time.Now()
+	w.log().Info("job started", "job", j.ID, "target", j.Target, "source", j.Source, "attempt", j.Attempts)
 	// Release only after every job-owned operation and persistence write finishes.
 	defer func() { returnErr = errors.Join(returnErr, w.Jobs.Release(j.ID)) }()
 	if j.CancelRequested {
-		return w.finish(j, jobs.Cancelled, "", false)
+		return w.finish(j, jobs.Cancelled, "", false, started)
 	}
 	workspace, err := w.Files.Workspace(j.ID)
 	if err != nil {
@@ -106,7 +113,9 @@ func (w *Worker) Run(parent context.Context, j jobs.Job) (returnErr error) {
 		if delay == 0 {
 			delay = time.Second
 		}
-		timer := time.NewTimer(delay * time.Duration(1<<(attempt-1)))
+		wait := delay * time.Duration(1<<(attempt-1))
+		w.log().Warn("retryable attempt failed; retrying with backoff", "job", j.ID, "code", failure.Code, "attempt", attempt, "delay", wait.String(), "detail", logging.Chain(err))
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -120,6 +129,7 @@ func (w *Worker) Run(parent context.Context, j jobs.Job) (returnErr error) {
 	close(done)
 	wg.Wait()
 	if monitorErr != nil {
+		w.log().Error("job monitor failed", "job", j.ID, "detail", logging.Chain(monitorErr))
 		return monitorErr
 	}
 	current, e := w.Jobs.Get(j.ID)
@@ -141,11 +151,15 @@ func (w *Worker) Run(parent context.Context, j jobs.Job) (returnErr error) {
 		}
 	}
 	if current.CancelRequested {
+		w.log().Info("cancellation requested by operator", "job", j.ID)
 		desired = jobs.Cancelled
 		code = "cancelled"
 	} else if ctx.Err() != nil {
+		w.log().Warn("job deadline exceeded", "job", j.ID, "timeout", w.Timeout.String())
 		desired = jobs.Failed
 		code = "timeout"
+	} else if err != nil {
+		w.log().Error("job failed", "job", j.ID, "code", code, "attempts", current.Attempts, "review", review, "detail", logging.Chain(err))
 	}
 	if e = w.Jobs.Metadata(j.ID, map[string]any{"installed": result.Installed, "replaced": result.Replaced, "uninstalled": result.Uninstalled}); e != nil {
 		return e
@@ -159,11 +173,13 @@ func (w *Worker) Run(parent context.Context, j jobs.Job) (returnErr error) {
 			e = w.Engine.Verify(output)
 		}
 		if e != nil {
+			w.log().Error("artifact verification failed", "job", j.ID, "detail", logging.Chain(e))
 			desired = jobs.Failed
 			code = "verification_failed"
 		} else {
 			size, hash, publishErr := w.Files.Publish(j.ID, output)
 			if publishErr != nil {
+				w.log().Error("artifact publication failed", "job", j.ID, "detail", logging.Chain(publishErr))
 				desired = jobs.Failed
 				code = "storage_failed"
 			} else {
@@ -171,6 +187,7 @@ func (w *Worker) Run(parent context.Context, j jobs.Job) (returnErr error) {
 				if e = w.Jobs.Metadata(j.ID, map[string]any{"bytes": size, "sha256": hash, "expires_at": expiry, "installed": result.Installed, "replaced": result.Replaced, "uninstalled": result.Uninstalled}); e != nil {
 					return e
 				}
+				w.log().Info("artifact verified and published", "job", j.ID, "bytes", size, "expires_at", expiry.Format(time.RFC3339))
 			}
 		}
 	}
@@ -178,9 +195,9 @@ func (w *Worker) Run(parent context.Context, j jobs.Job) (returnErr error) {
 		desired = jobs.Failed
 		code = "timeout"
 	}
-	return w.finish(j, desired, code, review)
+	return w.finish(j, desired, code, review, started)
 }
-func (w *Worker) finish(j jobs.Job, desired jobs.State, code string, review bool) error {
+func (w *Worker) finish(j jobs.Job, desired jobs.State, code string, review bool, started time.Time) error {
 	message := ""
 	if code != "" {
 		message = safeMessage(code)
@@ -195,11 +212,14 @@ func (w *Worker) finish(j jobs.Job, desired jobs.State, code string, review bool
 		cleanupErr = errors.Join(cleanupErr, w.Files.Remove("artifacts", j.ID))
 	}
 	if cleanupErr != nil {
+		w.log().Error("server cleanup failed; device quarantined", "job", j.ID, "detail", logging.Chain(cleanupErr))
 		return w.Jobs.Quarantine(j.ID, "Server cleanup failed. Resolve filesystem access and restart before confirming cleanup.", desired)
 	}
 	if review {
+		w.log().Warn("device review required before the job can finish", "job", j.ID, "state", string(desired))
 		return w.Jobs.Quarantine(j.ID, "Inspect job-owned device staging, helper files, and installed/replaced apps; confirm cleanup before continuing.", desired)
 	}
+	w.log().Info("job finished", "job", j.ID, "state", string(desired), "duration", time.Since(started).Round(time.Millisecond).String())
 	return w.Jobs.Change(j.ID, desired, map[string]any{"phase": string(desired)})
 }
 func safeMessage(code string) string {
@@ -223,6 +243,7 @@ func safeMessage(code string) string {
 
 // Reconcile on startup under the process lock before accepting device work.
 func (w *Worker) Recover() error {
+	w.log().Info("startup recovery started")
 	if err := w.Jobs.Recover(); err != nil {
 		return err
 	}
@@ -247,6 +268,7 @@ func (w *Worker) Recover() error {
 			j, exists := known[id]
 			keep := exists && ((kind == "inputs" && j.State == jobs.Queued) || (kind == "artifacts" && (j.State == jobs.Completed || (j.State == jobs.Cleaning && j.PendingState == jobs.Completed))))
 			if !keep {
+				w.log().Warn("removing abandoned storage entry", "kind", kind, "job", id)
 				if e = w.Files.Remove(kind, id); e != nil {
 					return e
 				}
@@ -256,7 +278,11 @@ func (w *Worker) Recover() error {
 	if err = w.Files.CleanupTemp(); err != nil {
 		return err
 	}
-	return w.Expire()
+	if err = w.Expire(); err != nil {
+		return err
+	}
+	w.log().Info("startup recovery completed")
+	return nil
 }
 func (w *Worker) Expire() error {
 	all, err := w.Jobs.All()
@@ -267,6 +293,7 @@ func (w *Worker) Expire() error {
 		if j.ExpiresAt == nil || j.ArtifactExpired || time.Now().Before(*j.ExpiresAt) {
 			continue
 		}
+		w.log().Info("artifact retention elapsed", "job", j.ID)
 		if err = w.Files.Remove("artifacts", j.ID); err != nil {
 			return err
 		}
@@ -296,5 +323,6 @@ func (w *Worker) Resolve(id string) error {
 	if err = w.Expire(); err != nil {
 		return err
 	}
+	w.log().Info("operator confirmed device cleanup", "job", id)
 	return w.Jobs.Resolve(id)
 }

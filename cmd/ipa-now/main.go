@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -16,6 +16,7 @@ import (
 	"github.com/6ixfalls/ipa-now/internal/engine"
 	"github.com/6ixfalls/ipa-now/internal/httpapi"
 	"github.com/6ixfalls/ipa-now/internal/jobs"
+	"github.com/6ixfalls/ipa-now/internal/logging"
 	"github.com/6ixfalls/ipa-now/internal/scheduler"
 	"github.com/6ixfalls/ipa-now/internal/secrets"
 	"github.com/6ixfalls/ipa-now/internal/storage"
@@ -25,7 +26,7 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		log.Print(err)
+		slog.Error("service failed", "detail", logging.Chain(err))
 		os.Exit(1)
 	}
 }
@@ -36,6 +37,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	log := logging.New(c.LogLevel, c.LogFormat)
+	slog.SetDefault(log)
 	files, err := storage.Open(c.DataDir)
 	if err != nil {
 		return err
@@ -50,6 +53,7 @@ func run() error {
 		return errors.New("unable to open SQLite job database")
 	}
 	defer store.Close()
+	store.Log = log
 	secretStore := secrets.New(files.Root, c.AppleEmail, c.ApplePassword)
 	if _, err = secretStore.Load(); err != nil {
 		return errors.New("unable to load the configured Apple account")
@@ -60,8 +64,8 @@ func run() error {
 	base.TLSHandshakeTimeout = 10 * time.Second
 	transport := &engine.JobTransport{Base: base}
 	http.DefaultTransport = transport
-	adapter := &engine.Adapter{Device: c.Device, Secrets: secretStore, Auth: auth, Transport: transport}
-	runner := &worker.Worker{Jobs: store, Files: files, Engine: adapter, Timeout: c.JobTimeout, Retention: c.Retention, MaxAttempts: c.MaxAttempts}
+	adapter := &engine.Adapter{Device: c.Device, Secrets: secretStore, Auth: auth, Transport: transport, Log: log}
+	runner := &worker.Worker{Jobs: store, Files: files, Engine: adapter, Timeout: c.JobTimeout, Retention: c.Retention, MaxAttempts: c.MaxAttempts, Log: log}
 	if err = runner.Recover(); err != nil {
 		return errors.New("startup reconciliation failed; inspect the private data directory")
 	}
@@ -71,7 +75,7 @@ func run() error {
 		allowedHost = c.Domain
 		allowedOrigin = "https://" + c.Domain
 	}
-	api := &httpapi.Server{Jobs: store, Files: files, Auth: auth, MaxUpload: c.MaxUpload, QueueLimit: c.QueueLimit, AppleEnabled: c.AppleEmail != "", Resolve: runner.Resolve, UI: web.Handler(), AllowedHosts: []string{allowedHost}, AllowedOrigin: allowedOrigin}
+	api := &httpapi.Server{Jobs: store, Files: files, Auth: auth, MaxUpload: c.MaxUpload, QueueLimit: c.QueueLimit, AppleEnabled: c.AppleEmail != "", Resolve: runner.Resolve, UI: web.Handler(), AllowedHosts: []string{allowedHost}, AllowedOrigin: allowedOrigin, Log: log}
 	srv := &http.Server{Addr: c.Listen, Handler: api.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Minute, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	listener, err := net.Listen("tcp", c.Listen)
 	if err != nil {
@@ -84,7 +88,7 @@ func run() error {
 	go func() { workerDone <- scheduler.Run(ctx, store, runner) }()
 	serverDone := make(chan error, 1)
 	go func() { serverDone <- srv.Serve(listener) }()
-	log.Print("ipa-now ready on configured listen address")
+	log.Info("service ready", "listen", c.Listen, "log_level", c.LogLevel.String())
 	workerStopped := false
 	select {
 	case <-ctx.Done():
@@ -94,10 +98,11 @@ func run() error {
 	case err = <-serverDone:
 		stop()
 	}
+	log.Info("service shutting down")
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if shutdownErr := srv.Shutdown(shutdown); shutdownErr != nil {
-		log.Print("HTTP shutdown deadline exceeded; restart requires reconciliation")
+		log.Error("HTTP shutdown deadline exceeded; restart requires reconciliation", "detail", logging.Chain(shutdownErr))
 		os.Exit(1) // active handlers cannot outlive the process-owned storage lock
 	}
 	if !workerStopped {
@@ -107,12 +112,14 @@ func run() error {
 		case <-shutdown.Done():
 			// Never close the lease/database while a library operation may still run.
 			// Process exit releases the OS lock; next startup quarantines the job.
-			log.Print("worker shutdown deadline exceeded; restart requires cleanup review")
+			log.Error("worker shutdown deadline exceeded; restart requires cleanup review")
 			os.Exit(1) // preserve the lease until the process and all goroutines exit
 		}
 	}
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Error("service stopped after an HTTP, worker, or persistence failure; restart requires reconciliation", "detail", logging.Chain(err))
 		return errors.New("service stopped after an HTTP, worker, or persistence failure; restart requires reconciliation")
 	}
+	log.Info("service stopped cleanly")
 	return nil
 }

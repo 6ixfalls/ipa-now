@@ -4,11 +4,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/6ixfalls/ipa-now/internal/logging"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -17,7 +19,12 @@ import (
 var ErrConflict = errors.New("job state conflict")
 var ErrQueueFull = errors.New("queue full")
 
-type Store struct{ db *gorm.DB }
+type Store struct {
+	db  *gorm.DB
+	Log *slog.Logger
+}
+
+func (s *Store) log() *slog.Logger { return logging.OrDiscard(s.Log) }
 
 func NewID() string {
 	var b [16]byte
@@ -76,7 +83,7 @@ func Open(path string) (*Store, error) {
 		sql.Close()
 		return nil, err
 	}
-	return &Store{db}, nil
+	return &Store{db: db}, nil
 }
 func (s *Store) Close() error {
 	db, err := s.db.DB()
@@ -223,6 +230,7 @@ func (s *Store) Recover() error {
 			if j.State == Cleaning && j.CleanupError != "" {
 				continue
 			}
+			s.log().Warn("job was active at shutdown; quarantined for device review", "job", j.ID, "state", string(j.State), "phase", j.Phase)
 			if err := tx.Model(&j).Updates(map[string]any{"state": Cleaning, "pending_state": Failed, "cleanup_error": "Interrupted job: inspect device resources before resuming.", "error_code": "interrupted", "error_message": "The service stopped before cleanup was confirmed.", "failure_reason": "process-recovery"}).Error; err != nil {
 				return err
 			}

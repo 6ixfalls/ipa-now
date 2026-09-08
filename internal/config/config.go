@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
+	"log/slog"
 	"net"
 	"net/mail"
 	"os"
@@ -19,6 +20,8 @@ import (
 
 type Config struct {
 	Listen, Domain, DataDir   string
+	LogLevel                  slog.Level
+	LogFormat                 string
 	Device                    ipa.DeviceConfig
 	AppleEmail, ApplePassword string
 	JobTimeout, Retention     time.Duration
@@ -156,6 +159,22 @@ func Parse(get func(string) string) (Config, error) {
 	c.MaxAttempts, e = strconv.Atoi(val("MAX_ATTEMPTS", "3"))
 	if e != nil || c.MaxAttempts < 1 || c.MaxAttempts > 5 {
 		return c, errors.New("invalid IPA_NOW_MAX_ATTEMPTS")
+	}
+	switch strings.ToLower(val("LOG_LEVEL", "info")) {
+	case "debug":
+		c.LogLevel = slog.LevelDebug
+	case "info":
+		c.LogLevel = slog.LevelInfo
+	case "warn", "warning":
+		c.LogLevel = slog.LevelWarn
+	case "error":
+		c.LogLevel = slog.LevelError
+	default:
+		return c, errors.New("invalid IPA_NOW_LOG_LEVEL (debug, info, warn, or error)")
+	}
+	c.LogFormat = strings.ToLower(val("LOG_FORMAT", "text"))
+	if c.LogFormat != "text" && c.LogFormat != "json" {
+		return c, errors.New("invalid IPA_NOW_LOG_FORMAT (text or json)")
 	}
 	return c, nil
 }

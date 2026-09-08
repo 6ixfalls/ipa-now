@@ -3,10 +3,12 @@ package engine
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"path/filepath"
 	"sync/atomic"
 
+	"github.com/6ixfalls/ipa-now/internal/logging"
 	"github.com/6ixfalls/ipa-now/internal/secrets"
 	ipa "github.com/londek/ipadecrypt/pkg/ipadecrypt"
 )
@@ -41,13 +43,17 @@ type Adapter struct {
 	Device      ipa.DeviceConfig
 	Secrets     *secrets.Store
 	Auth        *secrets.Broker
+	Log         *slog.Logger
 	DecryptFunc func(context.Context, ipa.Request) (*ipa.Result, error)
 }
+
+func (a *Adapter) log() *slog.Logger { return logging.OrDiscard(a.Log) }
 
 func (a *Adapter) Decrypt(ctx context.Context, r Request) (Result, error) {
 	if a.Transport != nil {
 		release, err := a.Transport.Scope(ctx)
 		if err != nil {
+			a.log().Warn("job HTTP scope unavailable", "job", r.ID, "detail", logging.Chain(err))
 			return Result{}, &Failure{Code: "device_unavailable", Cause: err}
 		}
 		defer release()
@@ -55,28 +61,36 @@ func (a *Adapter) Decrypt(ctx context.Context, r Request) (Result, error) {
 
 	account, err := a.Secrets.Load()
 	if err != nil {
+		a.log().Error("apple account session could not be loaded", "job", r.ID, "detail", logging.Chain(err))
 		return Result{}, &Failure{Code: "account_unavailable", Cause: err}
 	}
 	if account != nil && account.PasswordToken == "" && r.Source != "installed" {
-		account, err = ipa.Login(ctx, filepath.Join(r.Workspace, "login"), account.Email, account.Password, func(c context.Context) (string, error) { return a.Auth.Request(c, r.ID) })
+		a.log().Info("apple account login required", "job", r.ID)
+		account, err = ipa.Login(ctx, filepath.Join(r.Workspace, "login"), account.Email, account.Password, a.authCode(r.ID))
 		if err != nil {
+			a.log().Error("apple account login failed", "job", r.ID, "detail", logging.Chain(err))
 			return Result{}, &Failure{Code: "authentication_failed", Cause: err}
 		}
 		if err = a.Secrets.Save(ctx, *account); err != nil {
+			a.log().Error("apple account session could not be persisted", "job", r.ID, "detail", logging.Chain(err))
 			return Result{}, &Failure{Code: "account_unavailable", Cause: err}
 		}
+		a.log().Info("apple account login succeeded", "job", r.ID)
 	}
 	var touched atomic.Bool
 	call := a.DecryptFunc
 	if call == nil {
 		call = ipa.Decrypt
 	}
-	result, err := call(ctx, ipa.Request{Target: r.Target, Device: a.Device, Apple: account, StateDir: filepath.Join(r.Workspace, "state"), OutputPath: filepath.Join(r.Workspace, "output.ipa"), Source: ipa.SourcePolicy(r.Source), Uninstall: ipa.UninstallAuto, ExtraVerify: r.Source != "installed", OnAccountUpdate: a.Secrets.Save, OnAuthCode: func(c context.Context) (string, error) { return a.Auth.Request(c, r.ID) }, OnEvent: func(e ipa.Event) {
+	result, err := call(ctx, ipa.Request{Target: r.Target, Device: a.Device, Apple: account, StateDir: filepath.Join(r.Workspace, "state"), OutputPath: filepath.Join(r.Workspace, "output.ipa"), Source: ipa.SourcePolicy(r.Source), Uninstall: ipa.UninstallAuto, ExtraVerify: r.Source != "installed", OnAccountUpdate: a.Secrets.Save, OnAuthCode: a.authCode(r.ID), OnEvent: func(e ipa.Event) {
 		if e.Phase != ipa.PhaseConnecting {
 			touched.Store(true)
 		}
 		switch e.Phase {
 		case ipa.PhaseConnecting, ipa.PhaseProbing, ipa.PhaseResolving, ipa.PhaseDownloading, ipa.PhasePatching, ipa.PhaseInstalling, ipa.PhaseDecrypting, ipa.PhaseAssembling, ipa.PhaseVerifying, ipa.PhaseCleaning, ipa.PhaseComplete:
+			// Only structured phase counters are logged; raw helper
+			// messages/attributes stay discarded as untrusted detail.
+			a.log().Log(context.Background(), slog.LevelDebug, "engine progress", "job", r.ID, "phase", string(e.Phase), "current", max(e.Current, 0), "total", max(e.Total, 0))
 			r.Progress(Progress{string(e.Phase), max(e.Current, 0), max(e.Total, 0)})
 		}
 	}})
@@ -92,14 +106,34 @@ func (a *Adapter) Decrypt(ctx context.Context, r Request) (Result, error) {
 			code = "device_unavailable"
 			retry = true
 		}
+		a.log().Debug("classified engine failure", "job", r.ID, "code", code, "retryable", retry, "device_touched", touched.Load(), "detail", logging.Chain(err))
 		return Result{}, &Failure{Code: code, Retryable: retry, NeedsReview: touched.Load(), Cause: err}
 	}
 	if result == nil || !result.Verification.OK() || result.Verification.Scanned == 0 || len(result.Verification.Missing) > 0 {
+		a.log().Error("engine verification rejected the output", "job", r.ID, "scanned", verificationCount(result))
 		return Result{}, &Failure{Code: "verification_failed", NeedsReview: true}
 	}
 	// The pinned API omits remote resource ownership/recovery and suppresses a
 	// staging removal error. Never infer confirmed cleanup from a nil error.
 	return Result{Installed: result.Installed, Replaced: result.Reinstalled, Uninstalled: result.Uninstalled, NeedsReview: true}, nil
+}
+
+func (a *Adapter) authCode(id string) func(context.Context) (string, error) {
+	return func(c context.Context) (string, error) {
+		a.log().Info("waiting for the operator to submit a 2FA code", "job", id)
+		code, err := a.Auth.Request(c, id)
+		if err != nil {
+			a.log().Warn("2FA challenge ended without a code", "job", id, "detail", logging.Chain(err))
+		}
+		return code, err
+	}
+}
+
+func verificationCount(r *ipa.Result) int {
+	if r == nil {
+		return 0
+	}
+	return r.Verification.Scanned
 }
 func (a *Adapter) Verify(p string) error {
 	v, err := ipa.Verify(p, "", false)

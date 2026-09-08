@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/6ixfalls/ipa-now/internal/jobs"
+	"github.com/6ixfalls/ipa-now/internal/logging"
 	"github.com/6ixfalls/ipa-now/internal/secrets"
 	"github.com/6ixfalls/ipa-now/internal/storage"
 	"gorm.io/gorm"
@@ -29,8 +32,11 @@ type Server struct {
 	AppleEnabled  bool
 	Resolve       func(string) error
 	UI            http.Handler
+	Log           *slog.Logger
 	uploadMu      sync.Mutex
 }
+
+func (s *Server) log() *slog.Logger { return logging.OrDiscard(s.Log) }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -64,6 +70,7 @@ func (s *Server) Handler() http.Handler {
 				}
 			}
 			if !allowed {
+				s.log().Warn("request rejected by host check", "method", r.Method, "path", r.URL.Path, "host", r.Host)
 				problem(w, 403, "host_denied", "Use the configured service address.")
 				return
 			}
@@ -78,6 +85,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		if r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS" {
 			if r.Header.Get("X-IPA-Now") != "1" {
+				s.log().Warn("mutation rejected by same-origin check", "method", r.Method, "path", r.URL.Path)
 				problem(w, 403, "origin_denied", "A same-origin application request is required.")
 				return
 			}
@@ -92,13 +100,49 @@ func (s *Server) Handler() http.Handler {
 					expected = scheme + "://" + r.Host
 				}
 				if e != nil || u.String() != expected {
+					s.log().Warn("mutation rejected by origin check", "method", r.Method, "path", r.URL.Path)
 					problem(w, 403, "origin_denied", "Cross-origin requests are not allowed.")
 					return
 				}
 			}
 		}
-		mux.ServeHTTP(w, r)
+		// Successful API reads stay at debug: the browser polls them
+		// continuously. Rejections surface at warn/error.
+		if !strings.HasPrefix(r.URL.Path, "/api/") {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		start := time.Now()
+		rec := &statusWriter{ResponseWriter: w, status: 200}
+		mux.ServeHTTP(rec, r)
+		level := slog.LevelDebug
+		switch {
+		case rec.status >= 500:
+			level = slog.LevelError
+		case rec.status >= 400:
+			level = slog.LevelWarn
+		}
+		if s.log().Enabled(context.Background(), level) {
+			s.log().Log(context.Background(), level, "api request", "method", r.Method, "path", r.URL.Path, "status", rec.status, "duration", time.Since(start).Round(time.Millisecond).String())
+		}
 	})
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusWriter) Write(b []byte) (int, error) {
+	if w.status == 0 {
+		w.status = 200
+	}
+	return w.ResponseWriter.Write(b)
 }
 func write(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -159,6 +203,7 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request) {
 		s.storeError(w, e)
 		return
 	}
+	s.log().Info("job enqueued", "job", j.ID, "source", j.Source, "target", target)
 	write(w, 202, j)
 }
 func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
@@ -191,12 +236,14 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	r.Body = http.MaxBytesReader(w, r.Body, s.MaxUpload)
-	_, e = io.Copy(f, r.Body)
+	var received int64
+	received, e = io.Copy(f, r.Body)
 	if e != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(e, &tooBig) {
 			problem(w, 413, "upload_too_large", "The IPA exceeds the configured upload limit.")
 		} else {
+			s.log().Warn("upload interrupted", "detail", logging.Chain(e))
 			problem(w, 400, "upload_failed", "The upload was interrupted.")
 		}
 		return
@@ -223,6 +270,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	keep = true
+	s.log().Info("upload accepted", "job", id, "bytes", received)
 	write(w, 202, j)
 }
 func (s *Server) lookup(w http.ResponseWriter, r *http.Request) (jobs.Job, bool) {
@@ -257,6 +305,7 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 		s.storeError(w, e)
 		return
 	}
+	s.log().Info("cancellation requested", "job", j.ID)
 	write(w, 202, map[string]bool{"cancelRequested": true})
 }
 func (s *Server) authCode(w http.ResponseWriter, r *http.Request) {
@@ -274,6 +323,7 @@ func (s *Server) authCode(w http.ResponseWriter, r *http.Request) {
 		problem(w, 409, "invalid_challenge", e.Error())
 		return
 	}
+	s.log().Info("operator submitted a 2FA code", "job", j.ID)
 	w.WriteHeader(204)
 }
 func (s *Server) confirm(w http.ResponseWriter, r *http.Request) {
