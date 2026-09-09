@@ -1,8 +1,10 @@
 # ipadecrypt integration review
 
-Reviewed and pinned: `6ixfalls/ipadecrypt` fork commit `c1b5e837cf7255fe65230f04e691ee7c7e4efab7` (2026-09-08 UTC), module `v0.0.0-20260908101951-c1b5e837cf72`.
+Reviewed and pinned: `6ixfalls/ipadecrypt` fork commit `dbce8d45df22d470f26c50bec98abc281e4b3223` (2026-09-08 UTC), module `v0.0.0-20260908222426-dbce8d45df22`.
 
 The adapter uses public `Request.OperationID`, `Request.JournalDir`, `Cleanup`, and `LoginWithMACAddress` with fresh runtime credentials and a separate context. Only `github.com/londek/ipadecrypt/pkg/ipadecrypt` is imported; no CLI subprocess or internal package is used. A validated `IPA_NOW_APPLE_MAC_ADDRESS` keeps App Store login, purchase, and download requests on one stable identity. See [automated cleanup](automated-cleanup.md) for the implemented lifecycle, retry identities and schema v2 migration.
+
+Structured on-device helper events are written to the operator log at the helper-provided severity. Messages are bounded, normalized to one line, and redacted; only reviewed, allowlisted attributes are included. A bounded asynchronous queue drops excess diagnostics instead of blocking device work. Helper events are never persisted in job records or returned by the API.
 
 Verification is enabled, remote cleanup is enabled, unknown/changed SSH keys are rejected, and `UninstallAuto` is explicit. Installed-app jobs use `SourceInstalled` and preserve the preexisting app. Upload/App Store requests acknowledge replacement and uninstall without restoration of a prior build. The worker independently validates the final archive and requires scanned Mach-O files plus successful verification before atomic publication.
 

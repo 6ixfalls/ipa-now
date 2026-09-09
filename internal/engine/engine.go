@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 
 	"github.com/6ixfalls/ipa-now/internal/logging"
@@ -59,18 +60,87 @@ type OperationStore interface {
 	Operations(string) ([]string, error)
 }
 type Adapter struct {
-	Operations  OperationStore
-	JournalDir  string
-	Transport   *JobTransport
-	Device      ipa.DeviceConfig
-	Secrets     *secrets.Store
-	Auth        *secrets.Broker
-	Log         *slog.Logger
-	DecryptFunc func(context.Context, ipa.Request) (*ipa.Result, error)
-	CleanupFunc func(context.Context, ipa.CleanupRequest) (ipa.CleanupReport, error)
+	Operations    OperationStore
+	JournalDir    string
+	Transport     *JobTransport
+	Device        ipa.DeviceConfig
+	Secrets       *secrets.Store
+	Auth          *secrets.Broker
+	Log           *slog.Logger
+	DecryptFunc   func(context.Context, ipa.Request) (*ipa.Result, error)
+	CleanupFunc   func(context.Context, ipa.CleanupRequest) (ipa.CleanupReport, error)
+	helperLogOnce sync.Once
+	helperLogs    chan helperLogRecord
 }
 
 func (a *Adapter) log() *slog.Logger { return logging.OrDiscard(a.Log) }
+
+const helperLogQueueSize = 128
+
+// These fields are emitted by the pinned helper and contain only operational
+// diagnostics. New helper fields stay private until they are reviewed here.
+var helperLogFields = []string{
+	"action", "actual", "addr", "address", "argc", "base", "budget_ms", "bundle", "bundle_id", "bundle_src",
+	"bytes", "callers", "capacity", "cdhash", "cfrelease", "cfstring", "code0", "code1", "compressed", "core_foundation",
+	"count", "cpusubtype", "cputype", "crc32", "created", "cryptoff", "cryptsize", "csflags", "debugged", "dep",
+	"dependencies", "detail", "dir", "dirfd", "dlerror", "dst", "dyld", "dyld_base", "encrypted", "entries", "err",
+	"error", "exception", "exec", "execs_only", "exhausted_at", "expected", "extras", "fat", "fault", "fault_skips",
+	"fd", "file_size", "found", "foundation", "got", "handle", "has_error_object", "hits", "i", "image_base", "index",
+	"ipa", "kind", "kr", "launch", "libdyld", "links", "loaded", "mach_msg", "magic", "main", "message_id", "method",
+	"mode", "ms", "n", "name", "nsyms", "objc", "old_mode", "operation", "option", "output", "pac_strips", "pass",
+	"path", "pause", "pc", "pid", "platform", "pool", "port", "prims", "pthread_create", "rc", "read", "reason",
+	"regular", "requested", "requirements", "result", "ret", "rpaths", "scanned", "services", "signal", "size",
+	"skip_appex", "source", "springboard_services", "src", "staging", "status", "stripped", "subcommand", "tag", "target",
+	"verbose", "wait_result", "zlib",
+}
+
+type helperLogRecord struct {
+	level slog.Level
+	args  []any
+	done  chan struct{}
+}
+
+func (a *Adapter) enqueueHelperLog(level slog.Level, args ...any) {
+	logger := a.log()
+	if !logger.Enabled(context.Background(), level) {
+		return
+	}
+	a.helperLogOnce.Do(func() {
+		a.helperLogs = make(chan helperLogRecord, helperLogQueueSize)
+		go func() {
+			for record := range a.helperLogs {
+				if record.done != nil {
+					close(record.done)
+					continue
+				}
+				logger.Log(context.Background(), record.level, "helper output", record.args...)
+			}
+		}()
+	})
+	select {
+	case a.helperLogs <- helperLogRecord{level: level, args: args}:
+	default:
+		// Device work must keep moving even when the operator log is slow.
+	}
+}
+
+func (a *Adapter) flushHelperLogs(ctx context.Context) bool {
+	if a.helperLogs == nil {
+		return true
+	}
+	done := make(chan struct{})
+	select {
+	case a.helperLogs <- helperLogRecord{done: done}:
+	case <-ctx.Done():
+		return false
+	}
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
 
 func (a *Adapter) Decrypt(ctx context.Context, r Request) (Result, error) {
 	if a.Transport != nil {
@@ -116,10 +186,19 @@ func (a *Adapter) Decrypt(ctx context.Context, r Request) (Result, error) {
 		if e.Phase != ipa.PhaseConnecting && e.Phase != ipa.PhaseCleaning {
 			touched.Store(true)
 		}
+		if e.Phase == ipa.PhaseDecrypting && len(e.Attributes) > 0 {
+			fields := logging.Fields(e.Attributes, helperLogFields...)
+			args := []any{"job", r.ID, "action", logging.Detail(e.Action)}
+			if e.Message != "" {
+				args = append(args, "output", logging.Detail(e.Message))
+			}
+			if fields != "" {
+				args = append(args, "attributes", fields)
+			}
+			a.enqueueHelperLog(helperLogLevel(e.Attributes["level"]), args...)
+		}
 		switch e.Phase {
 		case ipa.PhaseConnecting, ipa.PhaseProbing, ipa.PhaseResolving, ipa.PhaseDownloading, ipa.PhasePatching, ipa.PhaseInstalling, ipa.PhaseDecrypting, ipa.PhaseAssembling, ipa.PhaseVerifying, ipa.PhaseCleaning, ipa.PhaseComplete:
-			// Only structured phase counters are logged; raw helper
-			// messages/attributes stay discarded as untrusted detail.
 			a.log().Log(context.Background(), slog.LevelDebug, "engine progress", "job", r.ID, "phase", string(e.Phase), "current", max(e.Current, 0), "total", max(e.Total, 0))
 			r.Progress(Progress{string(e.Phase), max(e.Current, 0), max(e.Total, 0)})
 		}
@@ -156,6 +235,19 @@ func (a *Adapter) Decrypt(ctx context.Context, r Request) (Result, error) {
 		return metadata, &Failure{Code: "verification_failed", NeedsReview: true}
 	}
 	return metadata, nil
+}
+
+func helperLogLevel(level string) slog.Level {
+	switch level {
+	case "error":
+		return slog.LevelError
+	case "warn":
+		return slog.LevelWarn
+	case "debug":
+		return slog.LevelDebug
+	default:
+		return slog.LevelInfo
+	}
 }
 
 func (a *Adapter) Cleanup(ctx context.Context, id string) (CleanupResult, error) {

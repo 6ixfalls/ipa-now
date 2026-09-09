@@ -54,6 +54,13 @@ func TestChainBoundedAndSingleLine(t *testing.T) {
 	}
 }
 
+func TestFieldsOnlyRendersAllowedKeys(t *testing.T) {
+	got := Fields(map[string]string{"path": "/private/app", "auth_code": "123456", "token": "abc123"}, "path")
+	if got != "path=/private/app" {
+		t.Fatalf("unexpected fields: %q", got)
+	}
+}
+
 func TestOrDiscardKeepsNilSilent(t *testing.T) {
 	OrDiscard(nil).Info("must not panic or print")
 	// A nil logger writing to stderr would pollute test output.
