@@ -1,6 +1,6 @@
 # ipadecrypt integration review
 
-Reviewed and pinned: `6ixfalls/ipadecrypt` fork commit `dbce8d45df22d470f26c50bec98abc281e4b3223` (2026-09-08 UTC), module `v0.0.0-20260908222426-dbce8d45df22`.
+Reviewed and pinned: `6ixfalls/ipadecrypt` fork commit `a405669a2e346bcc15c8a9d557fff7d3717dc058` (2026-09-09 UTC), module `v0.0.0-20260909074442-a405669a2e34`.
 
 The adapter uses public `Request.OperationID`, `Request.JournalDir`, `Cleanup`, and `LoginWithMACAddress` with fresh runtime credentials and a separate context. Only `github.com/londek/ipadecrypt/pkg/ipadecrypt` is imported; no CLI subprocess or internal package is used. A validated `IPA_NOW_APPLE_MAC_ADDRESS` keeps App Store login, purchase, and download requests on one stable identity. See [automated cleanup](automated-cleanup.md) for the implemented lifecycle, retry identities and schema v2 migration.
 
@@ -11,6 +11,7 @@ Verification is enabled, remote cleanup is enabled, unknown/changed SSH keys are
 ## Remaining compatibility limits
 
 - The helper uses private iOS installation/uninstallation APIs and entitlements in durable mode. Desktop tests and a matching rebuilt binary do not verify jailbreak compatibility. Unsupported operations fail closed; a receipt missing after interrupted helper execution requires review.
+- Before writing `helper.done`, the helper positively reaps ptrace-owned children and gives transient process-table entries one second to settle. Persistent live, uninspectable, or bundle-owned processes still fail closed. Bundle and extension teardown failures propagate instead of producing a premature `done` event.
 - The new helper uses owned random-token staging under `/private/var/mobile/Media/ipadecrypt-op-<token>`. Legacy jobs from the prior pin have no durable journal and may leave the old shared helper/staging or predictable `/tmp/ipadecrypt-<pid>` resources. They cannot be automatically attested by the new API.
 - App Store requests still use context-free private HTTP clients in places. The process-startup `JobTransport` attaches requests and body reads to the exclusive job context; outside-job requests are denied. Cleanup uses SSH, not this transport.
 - SAP/Unicorn runtime caches remain reusable private service dependencies under the service user's OS cache. The fork now puts patched IPA temporaries inside `StateDir`; process TMPDIR isolation/reconciliation remains for compatibility with legacy debris. Workspaces, inputs and failed output remain disposable, but the new device journal directory must survive.
