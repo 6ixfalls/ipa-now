@@ -4,7 +4,7 @@ go 1.26.0
 
 toolchain go1.26.5
 
-replace github.com/londek/ipadecrypt => github.com/6ixfalls/ipadecrypt v0.0.0-20260910055138-3e8da120b568
+replace github.com/londek/ipadecrypt => github.com/6ixfalls/ipadecrypt v0.0.0-20260910072508-1a1f81f47c10
 
 require (
 	github.com/londek/ipadecrypt v0.0.0-20260906200042-fbe5e07bbc71
