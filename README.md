@@ -9,7 +9,7 @@ Device cleanup runs automatically after decryption and during startup recovery. 
 - Go **1.26.5**, a C compiler and CGO enabled (GORM's SQLite driver uses `go-sqlite3`).
 - Node **22.15.0** and pnpm **11.24.0**. The frontend uses React, TypeScript, and Vite; no frontend server is needed in production.
 - Linux or macOS, local storage supporting SQLite WAL, file locking, atomic renames, and directory fsync. Do not use network storage.
-- One dedicated compatible jailbroken iOS device with SSH, the fork's required tools, and a manually verified host key. Upload/App Store installation requires `appinst`. The default installed-app workflow preserves the existing installation.
+- One dedicated compatible jailbroken iOS device with SSH, the fork's required tools, and a manually verified host key. Upload/App Store installation requires `appinst`. Automatic unlock requires RemoteCompanion; otherwise keep the device unlocked on the Home Screen during decryption. The default installed-app workflow preserves the existing installation.
 - An Apple account only for App Store requests. Passwords and refreshed sessions stay server-side.
 
 Only deploy on a trusted private network. There is no application authentication. Do not expose this service, its development server, or its data directory to the public Internet.
@@ -26,6 +26,8 @@ cp .env.example .env
 Edit `.env` with your private configuration. It is ignored by Git. The app does not load dotenv files automatically. Export the configuration in your shell without printing it:
 
 For App Store requests, set `IPA_NOW_APPLE_MAC_ADDRESS` to a stable six-byte address owned by this private deployment. The same normalized identity is used for login, purchase, and download requests; changing or clearing it invalidates the saved token and requires the configured Apple password for a fresh login.
+
+To unlock the device automatically, install RemoteCompanion and set `IPA_NOW_DEVICE_UNLOCK_PIN`. It is a server-side secret and remains a string so leading zeros are preserved. The engine checks the lock state immediately before decryption, attempts the PIN once only when locked, and verifies that the device unlocked. RemoteCompanion necessarily receives the PIN as a device process argument; do not enable this on a device shared with untrusted shell users. Without this setting, unlock the device manually and leave it on the Home Screen so SpringBoard can launch embedded frameworks.
 
 ```sh
 set -a
@@ -99,7 +101,7 @@ Progress callbacks coalesce into a one-element channel and persist at most four 
 
 The server writes structured logs to stderr with `IPA_NOW_LOG_LEVEL` (`debug`, `info`, `warn`, `error`; default `info`) and `IPA_NOW_LOG_FORMAT` (`text` or `json`; default `text`). Job lifecycle, retries, failure classification, cleanup quarantines, retention, recovery, and operator actions (enqueue, upload, cancel, 2FA submission, cleanup confirmation) are logged with job IDs. Failures include a bounded, single-line chain of wrapped library causes so operator-diagnosable detail (for example why Apple account authentication failed) is never reduced to a stable code alone. Credential-like values inside diagnostics are masked, passwords/tokens/keys/2FA codes are never logged, successful polled API reads appear only at `debug`, and the configured device address is not logged.
 
-The application starts an HTTP server, one scheduler goroutine, and a bounded per-job progress/cancellation monitor. The library also owns its SSH cancellation watcher. It makes Apple HTTPS and device SSH/SFTP requests through the public package; ipa-now does not spawn the ipadecrypt CLI or import internal packages. The library uploads/runs its helper, installs/uninstalls when policy allows, and writes device staging files. See [the reviewed limitations](docs/ipadecrypt.md) before operating a device.
+The application starts an HTTP server, one scheduler goroutine, and a bounded per-job progress/cancellation monitor. The library also owns its SSH cancellation watcher. It makes Apple HTTPS and device SSH/SFTP requests through the public package; ipa-now does not spawn the ipadecrypt CLI or import internal packages. The library uploads/runs its helper, optionally invokes RemoteCompanion to unlock the device, installs/uninstalls when policy allows, and writes device staging files. See [the reviewed limitations](docs/ipadecrypt.md) before operating a device.
 
 ## Storage, retention, and recovery
 

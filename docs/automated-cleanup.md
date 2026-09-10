@@ -1,6 +1,6 @@
 # Automated cleanup
 
-The real adapter is wired to `github.com/6ixfalls/ipadecrypt` at `v0.0.0-20260909074442-a405669a2e34`. It uses only the public `Decrypt`, `Cleanup`, `LoginWithMACAddress`, and `Verify` APIs.
+The real adapter is wired to `github.com/6ixfalls/ipadecrypt` at `v0.0.0-20260910055138-3e8da120b568`. It uses only the public `Decrypt`, `Cleanup`, `LoginWithMACAddress`, and `Verify` APIs.
 
 ## Execution and retry
 
@@ -28,7 +28,7 @@ Preserving journals after cleanup is intentional: a crash can occur after remote
 
 ## Device behavior and operator fallback
 
-Installed-app requests preserve the preexisting app. Upload/App Store requests acknowledge automatic uninstall of installed/replaced builds; uninstall does not restore a prior app or its data. Durable installs/uninstalls use the library helper's private iOS APIs and entitlements. Unsupported device behavior fails closed. Helper locks, seals and completion receipts prevent cleanup from assuming an interrupted process has stopped; hard-killed helpers can require intervention.
+Installed-app requests preserve the preexisting app. Upload/App Store requests acknowledge automatic uninstall of installed/replaced builds; uninstall does not restore a prior app or its data. Durable installs/uninstalls use the library helper's private iOS APIs and entitlements. Unsupported device behavior fails closed. Helper locks, seals and completion receipts prevent cleanup from assuming an interrupted process has stopped; hard-killed helpers can require intervention. The helper rejects incomplete bundles with encrypted nested Mach-O files, and the engine can use the optional in-memory unlock PIN with RemoteCompanion before decryption; neither lock handling nor a decryption failure relaxes cleanup confirmation.
 
 For unconfirmed jobs, follow [operator cleanup review](ipadecrypt.md#operator-cleanup-review). Logs use the configured process logger with job IDs, durations, stable outcome reasons and bounded/redacted diagnostics; raw journal contents and progress attributes are not logged.
 

@@ -19,11 +19,11 @@ import (
 
 func TestAdapterPublicAPIAndSafeDefaults(t *testing.T) {
 	root := t.TempDir()
-	a := &Adapter{Operations: &fakeOperations{}, JournalDir: filepath.Join(root, "journal"), Device: ipa.DeviceConfig{Host: "configured-device", KnownHostsPath: "/dedicated/known_hosts"}, Secrets: secrets.New(root, "", "", ""), Auth: &secrets.Broker{}}
+	a := &Adapter{Operations: &fakeOperations{}, JournalDir: filepath.Join(root, "journal"), Device: ipa.DeviceConfig{Host: "configured-device", UnlockPIN: "001234", KnownHostsPath: "/dedicated/known_hosts"}, Secrets: secrets.New(root, "", "", ""), Auth: &secrets.Broker{}}
 	called := false
 	a.DecryptFunc = func(ctx context.Context, r ipa.Request) (*ipa.Result, error) {
 		called = true
-		if r.OperationID == "" || r.JournalDir != a.JournalDir || r.KeepRemoteFiles || r.SkipVerify || r.Device.AcceptNewHostKey || r.Uninstall != ipa.UninstallAuto || r.StateDir != filepath.Join(root, "state") || r.OutputPath != filepath.Join(root, "output.ipa") {
+		if r.OperationID == "" || r.JournalDir != a.JournalDir || r.KeepRemoteFiles || r.SkipVerify || r.Device.UnlockPIN != "001234" || r.Device.AcceptNewHostKey || r.Uninstall != ipa.UninstallAuto || r.StateDir != filepath.Join(root, "state") || r.OutputPath != filepath.Join(root, "output.ipa") {
 			t.Fatal("unsafe request")
 		}
 		r.OnEvent(ipa.Event{Phase: ipa.PhaseDecrypting, Message: "password=secret", Attributes: map[string]string{"token": "secret"}})
@@ -35,6 +35,32 @@ func TestAdapterPublicAPIAndSafeDefaults(t *testing.T) {
 		t.Fatal(r, e)
 	}
 }
+
+func TestAdapterClassifiesLockedDevice(t *testing.T) {
+	for _, tc := range []struct {
+		name, detail string
+		retry        bool
+	}{
+		{name: "locked", detail: "unlock failed", retry: false},
+		{name: "unlock rejected", detail: "RemoteCompanion unlock failed; check the tweak and configured PIN", retry: false},
+		{name: "lock probe failed", detail: "cannot determine device lock state", retry: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &Adapter{Operations: &fakeOperations{}, JournalDir: filepath.Join(t.TempDir(), "journal"), Secrets: secrets.New(t.TempDir(), "", "", ""), Auth: &secrets.Broker{}, DecryptFunc: func(_ context.Context, r ipa.Request) (*ipa.Result, error) {
+				// Real decryption emits probing progress before checking the lock
+				// state, which marks the device as touched in the adapter.
+				r.OnEvent(ipa.Event{Phase: ipa.PhaseProbing})
+				return nil, fmt.Errorf("%w: %s", ipa.ErrDeviceLocked, tc.detail)
+			}}
+			_, err := a.Decrypt(context.Background(), Request{Source: "installed", Progress: func(Progress) {}})
+			var failure *Failure
+			if !errors.As(err, &failure) || failure.Code != "device_locked" || failure.Retryable != tc.retry || !failure.NeedsReview {
+				t.Fatalf("locked-device failure misclassified: %+v", failure)
+			}
+		})
+	}
+}
+
 func TestAdapterRetryClassification(t *testing.T) {
 	for _, touched := range []bool{false, true} {
 		a := &Adapter{Operations: &fakeOperations{}, JournalDir: filepath.Join(t.TempDir(), "journal"), Secrets: secrets.New(t.TempDir(), "", "", ""), Auth: &secrets.Broker{}, DecryptFunc: func(ctx context.Context, r ipa.Request) (*ipa.Result, error) {

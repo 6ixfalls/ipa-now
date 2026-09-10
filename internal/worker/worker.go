@@ -285,6 +285,8 @@ func safeMessage(code string) string {
 	switch code {
 	case "verification_failed":
 		return "The output did not pass IPA verification."
+	case "device_locked":
+		return "The device could not be unlocked. Check RemoteCompanion and the configured unlock PIN, or unlock it manually."
 	case "device_unavailable":
 		return "The configured device could not be reached."
 	case "authentication_failed", "account_unavailable":

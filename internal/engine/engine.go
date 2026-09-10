@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -219,7 +220,17 @@ func (a *Adapter) Decrypt(ctx context.Context, r Request) (Result, error) {
 		code := "decryption_failed"
 		retry := false
 		var ne net.Error
-		if errors.Is(err, ipa.ErrVerificationFailed) {
+		if errors.Is(err, ipa.ErrDeviceLocked) {
+			code = "device_locked"
+			// The pinned package sanitizes lock-probe failures because the
+			// underlying SSH error may contain the PIN-bearing command. A failed
+			// probe is safe to retry after the worker confirms cleanup; keep all
+			// other locked-device outcomes non-retryable to avoid repeatedly
+			// submitting a bad PIN. Normal device probing has already emitted a
+			// progress event by this point, so touched cannot distinguish these
+			// outcomes.
+			retry = strings.Contains(err.Error(), "cannot determine device lock state")
+		} else if errors.Is(err, ipa.ErrVerificationFailed) {
 			code = "verification_failed"
 		} else if ctx.Err() != nil {
 			code = "interrupted"

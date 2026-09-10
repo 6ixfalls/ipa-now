@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	ipa "github.com/londek/ipadecrypt/pkg/ipadecrypt"
 )
@@ -85,6 +87,10 @@ func Parse(get func(string) string) (Config, error) {
 	c.Device.User = val("DEVICE_USER", "mobile")
 	if !regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_-]{0,31}$`).MatchString(c.Device.User) {
 		return c, errors.New("invalid IPA_NOW_DEVICE_USER")
+	}
+	c.Device.UnlockPIN = val("DEVICE_UNLOCK_PIN", "")
+	if c.Device.UnlockPIN != "" && (!utf8.ValidString(c.Device.UnlockPIN) || len(c.Device.UnlockPIN) > 64 || strings.TrimSpace(c.Device.UnlockPIN) != c.Device.UnlockPIN || strings.IndexFunc(c.Device.UnlockPIN, unicode.IsControl) >= 0) {
+		return c, errors.New("invalid IPA_NOW_DEVICE_UNLOCK_PIN")
 	}
 	c.Device.Auth = ipa.DeviceAuth{Kind: val("SSH_AUTH", "key"), KeyPath: val("SSH_KEY_PATH", ""), KeyPassphrase: val("SSH_KEY_PASSPHRASE", ""), Password: val("SSH_PASSWORD", "")}
 	switch c.Device.Auth.Kind {
