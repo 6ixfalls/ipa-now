@@ -1,6 +1,6 @@
 # Automated cleanup
 
-The real adapter is wired to `github.com/6ixfalls/ipadecrypt` at `v0.0.0-20260910072508-1a1f81f47c10`. It uses only the public `Decrypt`, `Cleanup`, `LoginWithMACAddress`, and `Verify` APIs.
+The real adapter is wired to `github.com/6ixfalls/ipadecrypt` at `v0.0.0-20260910090157-b91a95e6f1b4`. It uses only the public `Decrypt`, `Cleanup`, `LoginWithMACAddress`, and `Verify` APIs.
 
 ## Execution and retry
 
