@@ -1,6 +1,6 @@
 # ipadecrypt integration review
 
-Reviewed and pinned: `6ixfalls/ipadecrypt` fork commit `b91a95e6f1b40b4ff4a65dc6c4866d3a0b618d36` (2026-09-10 UTC), module `v0.0.0-20260910090157-b91a95e6f1b4`.
+Reviewed and pinned: `6ixfalls/ipadecrypt` fork commit `9e7d11de4bee0dea5abce202fc7f4ec470ff3a30` (2026-09-10 UTC), module `v0.0.0-20260910224641-9e7d11de4bee`.
 
 The adapter uses public `Request.OperationID`, `Request.JournalDir`, `DeviceConfig.UnlockPIN`, `Cleanup`, and `LoginWithMACAddress` with fresh runtime credentials and a separate context. Only `github.com/londek/ipadecrypt/pkg/ipadecrypt` is imported; no CLI subprocess or internal package is used. A validated `IPA_NOW_APPLE_MAC_ADDRESS` keeps App Store login, purchase, and download requests on one stable identity. The optional `IPA_NOW_DEVICE_UNLOCK_PIN` is passed only in the in-memory device configuration; it is not journaled, logged, persisted in job data, or returned by the API. See [automated cleanup](automated-cleanup.md) for the implemented lifecycle, retry identities and schema v2 migration.
 

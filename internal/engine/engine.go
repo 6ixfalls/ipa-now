@@ -24,6 +24,7 @@ type Request struct {
 	Progress                      func(Progress)
 }
 type Result struct {
+	BundleID, Version                string
 	Installed, Replaced, Uninstalled bool
 	NeedsReview                      bool
 }
@@ -206,6 +207,7 @@ func (a *Adapter) Decrypt(ctx context.Context, r Request) (Result, error) {
 	}})
 	metadata := Result{NeedsReview: true}
 	if result != nil {
+		metadata.BundleID, metadata.Version = result.BundleID, result.Version
 		metadata.Installed, metadata.Replaced, metadata.Uninstalled = result.Installed, result.Reinstalled, result.Uninstalled
 	}
 	verified := result != nil && result.Verification.OK() && result.Verification.Scanned > 0 && len(result.Verification.Missing) == 0

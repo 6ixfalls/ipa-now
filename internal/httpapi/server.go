@@ -368,9 +368,44 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
+	name := downloadName(j)
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+j.ID+`.ipa"`)
-	http.ServeContent(w, r, j.ID+".ipa", info.ModTime(), f)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	http.ServeContent(w, r, name, info.ModTime(), f)
+}
+
+// downloadName derives the safe Content-Disposition filename from persisted
+// app metadata, falling back to the opaque job ID for legacy rows. Untrusted
+// bundle/version strings are reduced to a conservative ASCII subset so they
+// cannot carry separators, traversal, quotes, or header corruption.
+func downloadName(j jobs.Job) string {
+	var parts []string
+	for _, part := range []string{j.BundleID, j.Version} {
+		if s := sanitizeNamePart(part); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	name := strings.Join(parts, "-")
+	if name == "" {
+		name = j.ID
+	}
+	if len(name) > 150 {
+		name = name[:150]
+	}
+	return name + ".ipa"
+}
+
+func sanitizeNamePart(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	return strings.Trim(b.String(), ".-")
 }
 func (s *Server) storeError(w http.ResponseWriter, e error) {
 	switch {

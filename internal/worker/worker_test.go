@@ -93,6 +93,28 @@ func TestSuccessPublicationAndRetention(t *testing.T) {
 		t.Fatal("expired artifact retained")
 	}
 }
+
+func TestSuccessBoundsPersistedAppMetadata(t *testing.T) {
+	w, j := setup(t)
+	w.Engine = fakeEngine{run: func(ctx context.Context, r engine.Request) (engine.Result, error) {
+		testutil.WriteIPA(t, filepath.Join(r.Workspace, "output.ipa"))
+		return engine.Result{BundleID: strings.Repeat("a", 300), Version: strings.Repeat("界", 30)}, nil
+	}}
+	if err := w.Run(context.Background(), j); err != nil {
+		t.Fatal(err)
+	}
+	got, err := w.Jobs.Get(j.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BundleID != strings.Repeat("a", maxBundleIDBytes) {
+		t.Fatalf("bundle ID was not bounded: %d bytes", len(got.BundleID))
+	}
+	if got.Version != strings.Repeat("界", 21) {
+		t.Fatalf("version was not bounded on a UTF-8 boundary: %q", got.Version)
+	}
+}
+
 func TestQuarantineBlocksDeviceUntilConfirmed(t *testing.T) {
 	w, j := setup(t)
 	w.Engine = success(t, true)

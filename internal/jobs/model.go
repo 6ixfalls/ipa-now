@@ -49,6 +49,8 @@ type Job struct {
 	Total           int64      `json:"total"`
 	Bytes           int64      `json:"bytes"`
 	SHA256          string     `json:"sha256,omitempty"`
+	BundleID        string     `json:"bundleId,omitempty" gorm:"size:255"`
+	Version         string     `json:"version,omitempty" gorm:"size:64"`
 	CreatedAt       time.Time  `json:"createdAt"`
 	UpdatedAt       time.Time  `json:"updatedAt"`
 	AvailableAt     time.Time  `json:"-"`

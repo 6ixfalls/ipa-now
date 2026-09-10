@@ -39,7 +39,7 @@ func (f *fake) Decrypt(ctx context.Context, r engine.Request) (engine.Result, er
 		return engine.Result{}, &engine.Failure{Code: "device_unavailable", Retryable: true}
 	}
 	testutil.WriteIPA(f.t, filepath.Join(r.Workspace, "output.ipa"))
-	return engine.Result{NeedsReview: f.review}, nil
+	return engine.Result{BundleID: "com.example.app", Version: "1.2.3", NeedsReview: f.review}, nil
 }
 func (f *fake) Verify(string) error { return nil }
 func harness(t *testing.T) (http.Handler, *Server, *worker.Worker, *fake) {
@@ -142,7 +142,7 @@ func TestEndToEndSuccessFailureRetryCancellation(t *testing.T) {
 				if rec.Code != 200 || !bytes.Equal(rec.Body.Bytes(), testutil.IPA(t)) {
 					t.Fatal("wrong artifact", rec.Code)
 				}
-				if rec.Header().Get("Content-Disposition") != `attachment; filename="`+j.ID+`.ipa"` {
+				if rec.Header().Get("Content-Disposition") != `attachment; filename="com.example.app-1.2.3.ipa"` {
 					t.Fatal("unsafe filename")
 				}
 			} else if rec.Code != 409 {
@@ -263,5 +263,22 @@ func TestDownloadTraversalAndRedaction(t *testing.T) {
 		if strings.Contains(string(data), forbidden) {
 			t.Fatal("status leaked credentials")
 		}
+	}
+}
+func TestDownloadName(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		job  jobs.Job
+		want string
+	}{{"app and version", jobs.Job{BundleID: "com.example.app", Version: "1.2.3"}, "com.example.app-1.2.3.ipa"},
+		{"no version", jobs.Job{BundleID: "com.example.app"}, "com.example.app.ipa"},
+		{"legacy job", jobs.Job{ID: "abc123"}, "abc123.ipa"},
+		{"hostile metadata", jobs.Job{ID: "abc123", BundleID: `../../e"x\` + "\n" + `.app`, Version: "1..2/../3"}, "e-x--.app-1..2-..-3.ipa"},
+		{"overlong", jobs.Job{ID: "abc123", BundleID: strings.Repeat("a", 300)}, strings.Repeat("a", 150) + ".ipa"}} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := downloadName(test.job); got != test.want {
+				t.Fatalf("got %q want %q", got, test.want)
+			}
+		})
 	}
 }

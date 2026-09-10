@@ -6,8 +6,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/6ixfalls/ipa-now/internal/engine"
 	"github.com/6ixfalls/ipa-now/internal/jobs"
@@ -25,6 +27,11 @@ type Worker struct {
 	Log                *slog.Logger
 	CleanupTimeout     time.Duration
 }
+
+const (
+	maxBundleIDBytes = 255
+	maxVersionBytes  = 64
+)
 
 func (w *Worker) log() *slog.Logger { return logging.OrDiscard(w.Log) }
 
@@ -188,7 +195,7 @@ func (w *Worker) Run(parent context.Context, j jobs.Job) (returnErr error) {
 				code = "storage_failed"
 			} else {
 				expiry := time.Now().Add(w.Retention)
-				if e = w.Jobs.Metadata(j.ID, map[string]any{"bytes": size, "sha256": hash, "expires_at": expiry, "installed": result.Installed, "replaced": result.Replaced, "uninstalled": result.Uninstalled}); e != nil {
+				if e = w.Jobs.Metadata(j.ID, map[string]any{"bytes": size, "sha256": hash, "bundle_id": boundedMetadata(result.BundleID, maxBundleIDBytes), "version": boundedMetadata(result.Version, maxVersionBytes), "expires_at": expiry, "installed": result.Installed, "replaced": result.Replaced, "uninstalled": result.Uninstalled}); e != nil {
 					return e
 				}
 				w.log().Info("artifact verified and published", "job", j.ID, "bytes", size, "expires_at", expiry.Format(time.RFC3339))
@@ -201,6 +208,19 @@ func (w *Worker) Run(parent context.Context, j jobs.Job) (returnErr error) {
 	}
 	return w.finish(j, desired, code, review, started)
 }
+
+func boundedMetadata(value string, maxBytes int) string {
+	value = strings.ToValidUTF8(value, "")
+	if len(value) <= maxBytes {
+		return value
+	}
+	value = value[:maxBytes]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
+}
+
 func (w *Worker) finish(j jobs.Job, desired jobs.State, code string, review bool, started time.Time) error {
 	message := ""
 	if code != "" {

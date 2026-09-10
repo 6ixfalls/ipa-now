@@ -23,6 +23,8 @@ export interface Job {
   artifactExpired: boolean;
   bytes: number;
   sha256?: string;
+  bundleId?: string;
+  version?: string;
   installed: boolean;
   replaced: boolean;
   uninstalled: boolean;
