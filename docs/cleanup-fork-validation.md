@@ -12,7 +12,7 @@ The reviewed implementation adds `Request.OperationID`, `Request.JournalDir`, pu
 
 The helper uses a private operation directory, exclusive/no-follow file primitives, an operation lock, a permanent seal against delayed install/decrypt launches, and completion receipts. A busy or hard-killed helper without the required receipt remains unconfirmed; automatic termination of arbitrary interrupted processes is intentionally not implemented. This conservative intervention path is consistent with automation unless an issue requires intervention.
 
-Durable installation now calls LaunchServices from the owned helper instead of appinst. That avoids appinst's shared temporary storage but introduces a device compatibility requirement: private installation/uninstallation selectors, signing entitlements, and jailbreak permissions must be exercised on the target device. No physical device or Apple account was used during this review.
+Durable installation now calls LaunchServices from the owned helper instead of appinst. That avoids appinst's shared temporary storage but introduces a device compatibility requirement: private installation/uninstallation selectors, signing capabilities, and jailbreak permissions must be exercised on the target device. No physical device or Apple account was used during this review.
 
 ## Validation evidence
 

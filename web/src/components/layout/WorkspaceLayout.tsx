@@ -49,7 +49,7 @@ export function WorkspaceLayout({
             <span>
               <i className="footer-dot" /> Stored locally. Served privately.
             </span>
-            <span>For legally obtained apps · Trusted private networks</span>
+            <span>Self-hosted · Trusted private networks</span>
           </footer>
         </div>
       </main>

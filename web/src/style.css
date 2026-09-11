@@ -370,6 +370,12 @@ input::placeholder {
   line-height: 1.7;
   margin: 8px 0 22px;
 }
+.field-help a {
+  color: #61743d;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 .check {
   display: flex;
   gap: 8px;

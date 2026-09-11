@@ -16,7 +16,10 @@ beforeEach(() => {
       if (url === "/api/status") return Response.json(state);
       if (url === "/api/jobs" && init?.method === "POST") {
         const body = JSON.parse(init.body as string);
-        const job = makeJob({ target: body.target, source: body.source });
+        const job = makeJob({
+          target: body.target,
+          source: body.source,
+        });
         jobs.push(job);
         return Response.json(job, { status: 202 });
       }
@@ -30,7 +33,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("workspace", () => {
-  it("renders a real empty state and enqueues an entitled installed app", async () => {
+  it("renders a real empty state and enqueues an installed app", async () => {
     const user = userEvent.setup();
     render(<App />);
     expect(await screen.findByText("A clean slate.")).toBeTruthy();
@@ -45,12 +48,7 @@ describe("workspace", () => {
           name: /Add to queue/,
         }) as HTMLButtonElement
       ).disabled,
-    ).toBe(true);
-    await user.click(
-      screen.getByLabelText(
-        "I am legally entitled to obtain and decrypt this app.",
-      ),
-    );
+    ).toBe(false);
     await user.click(screen.getByRole("button", { name: /Add to queue/ }));
     expect(await screen.findByRole("status")).toBeTruthy();
     expect(screen.getByRole("region", { name: "Job details" })).toBeTruthy();
@@ -61,7 +59,6 @@ describe("workspace", () => {
         body: JSON.stringify({
           target: "com.example.app",
           source: "installed",
-          entitled: true,
           allowReplacement: false,
         }),
       }),
@@ -73,11 +70,6 @@ describe("workspace", () => {
     await screen.findByText("Available");
     await user.click(screen.getByRole("button", { name: "App Store" }));
     await user.type(screen.getByLabelText("App identifier or URL"), "123456");
-    await user.click(
-      screen.getByLabelText(
-        "I am legally entitled to obtain and decrypt this app.",
-      ),
-    );
     expect(
       (
         screen.getByRole("button", {

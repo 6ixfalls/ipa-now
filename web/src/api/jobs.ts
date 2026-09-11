@@ -4,7 +4,6 @@ export interface JobSubmission {
   source: JobSource;
   target: string;
   file?: File;
-  entitled: boolean;
   allowReplacement: boolean;
 }
 export async function loadWorkspace(signal?: AbortSignal) {
@@ -18,12 +17,11 @@ export async function createJob(
   request: JobSubmission,
   maxUploadBytes: number,
 ): Promise<Job> {
-  const { source, target, file, entitled, allowReplacement } = request;
+  const { source, target, file, allowReplacement } = request;
   if (source !== "upload")
     return post<Job>("/jobs", {
       target: target.trim(),
       source,
-      entitled,
       allowReplacement,
     });
   if (!file) throw new Error("Choose an IPA file.");
@@ -35,7 +33,6 @@ export async function createJob(
       headers: {
         "Content-Type": "application/octet-stream",
         "X-IPA-Now": "1",
-        "X-IPA-Entitled": String(entitled),
         "X-IPA-Allow-Replacement": String(allowReplacement),
       },
       body: file,

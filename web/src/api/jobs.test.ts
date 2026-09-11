@@ -3,7 +3,7 @@ import { makeJob } from "../testing/fixtures";
 import { createJob } from "./jobs";
 
 afterEach(() => vi.unstubAllGlobals());
-it("sends raw IPA bytes and entitlement headers through the shared client", async () => {
+it("sends raw IPA bytes and replacement acknowledgement through the shared client", async () => {
   const file = new File(["synthetic fixture"], "example.ipa");
   const job = makeJob({ source: "upload" });
   vi.stubGlobal(
@@ -16,7 +16,6 @@ it("sends raw IPA bytes and entitlement headers through the shared client", asyn
         source: "upload",
         target: "",
         file,
-        entitled: true,
         allowReplacement: true,
       },
       1024,
@@ -30,7 +29,6 @@ it("sends raw IPA bytes and entitlement headers through the shared client", asyn
       headers: {
         "Content-Type": "application/octet-stream",
         "X-IPA-Now": "1",
-        "X-IPA-Entitled": "true",
         "X-IPA-Allow-Replacement": "true",
       },
     }),
@@ -45,7 +43,6 @@ it("rejects oversized uploads before sending any bytes", async () => {
         source: "upload",
         target: "",
         file: new File(["too large"], "example.ipa"),
-        entitled: true,
         allowReplacement: true,
       },
       1,
@@ -66,7 +63,6 @@ it("preserves safe API error messages and handles non-JSON failures", async () =
   const request = {
     source: "installed" as const,
     target: "com.example.app",
-    entitled: true,
     allowReplacement: false,
   };
   await expect(createJob(request, 1024)).rejects.toThrow("The queue is full.");

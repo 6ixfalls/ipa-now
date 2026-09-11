@@ -1,6 +1,6 @@
 # ipa-now
 
-A private, self-hosted workspace for decrypting iOS apps you are legally entitled to obtain and decrypt. Go runs the HTTP API, a SQLite/GORM durable queue, one device worker, and the compiled React UI in one process.
+A private, self-hosted workspace for decrypting iOS apps. Go runs the HTTP API, a SQLite/GORM durable queue, one device worker, and the compiled React UI in one process.
 
 Device cleanup runs automatically after decryption and during startup recovery. Jobs complete only after the library explicitly confirms cleanup; failures or uncertain ownership quarantine the device for recovery or operator review. See [cleanup and recovery](docs/automated-cleanup.md).
 
@@ -47,7 +47,7 @@ For host enrollment, obtain the SSH host public key and fingerprint through a tr
 
 ## Using the workspace
 
-1. Choose **Installed app**, **App Store**, or **Upload IPA**. Confirm that you are entitled to obtain and decrypt the app.
+1. Choose **Installed app**, **App Store**, or **Upload IPA**.
 2. Installed-app requests accept a bundle ID and preserve the installed app. App Store and upload requests additionally require acknowledgement that the build may replace an installed app and be automatically uninstalled. The previous build is not restored.
 3. Follow persisted job phases in the queue. A request survives closing the browser or disconnecting its HTTP request. Submit an Apple 2FA code in the active job's prompt if requested; codes exist only in memory for that challenge.
 4. On cancellation, timeout, failure, or success, the worker attempts cleanup. If cleanup cannot be confirmed automatically, follow [the exact review steps](docs/ipadecrypt.md#operator-cleanup-review), then confirm cleanup in the job details.
@@ -74,7 +74,7 @@ A stopped or crashed job is not blindly replayed. Restart reconciles server file
 
 For frontend development, run `make dev` and `make dev-web` in separate terminals, then use [Vite](http://127.0.0.1:5173). Keep the default backend address for the development proxy. It only rewrites the exact development origin; arbitrary origins are rejected.
 
-The real-device test operates on an installed app you are entitled to decrypt, keeps the durable job in the configured data directory, and asserts automatic cleanup confirmation. Stop the server first. Do not run it against a busy device. If the test fails, start the service afterward to attempt recovery and inspect any remaining cleanup issue. It is excluded from the default suite and CI.
+The real-device test operates on an installed app, keeps the durable job in the configured data directory, and asserts automatic cleanup confirmation. Stop the server first. Do not run it against a busy device. If the test fails, start the service afterward to attempt recovery and inspect any remaining cleanup issue. It is excluded from the default suite and CI.
 
 ## Architecture
 

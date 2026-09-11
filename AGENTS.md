@@ -2,7 +2,7 @@
 
 ## Project overview
 
-ipa-now is an open-source, self-hosted service for decrypting legally obtained and purchased iOS IPA files. It is intended as a private alternative to hosted services such as decrypt.day and armconverter.com.
+ipa-now is an open-source, self-hosted service for decrypting iOS IPA files. It is intended as a private alternative to hosted services such as decrypt.day and armconverter.com.
 
 The primary flow is:
 
@@ -26,7 +26,7 @@ Do not add a frontend server-side framework, external queue, or multiple-device 
 
 ## Product boundaries
 
-- Support only IPAs and App Store apps that the operator is legally entitled to obtain and decrypt. Do not add piracy-oriented discovery, catalog scraping, public sharing, DRM circumvention as a service for third parties, or features that disguise misuse.
+- Support only operator-supplied IPAs and apps available through the configured device or Apple account. Do not add piracy-oriented discovery, catalog scraping, public sharing, DRM circumvention as a service for third parties, or features that disguise misuse.
 - The deployment model is a trusted, private network. No application authentication is required by default. Do not imply that the service is safe to expose directly to the public Internet.
 - Lack of authentication is not permission to omit input validation, request limits, filesystem isolation, secret handling, or safe defaults.
 - Keep decrypted artifacts private to the operator. Do not add public indexing or permanent public URLs.

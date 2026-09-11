@@ -18,7 +18,6 @@ export function RequestForm({
   const [source, setSource] = useState<JobSource>("installed");
   const [target, setTarget] = useState("");
   const [file, setFile] = useState<File>();
-  const [entitled, setEntitled] = useState(false);
   const [replace, setReplace] = useState(false);
 
   const input = useRef<HTMLInputElement>(null);
@@ -26,13 +25,12 @@ export function RequestForm({
     event.preventDefault();
     void action(async () => {
       const job = await createJob(
-        { source, target, file, entitled, allowReplacement: replace },
+        { source, target, file, allowReplacement: replace },
         status?.maxUploadBytes ?? DEFAULT_UPLOAD_LIMIT,
       );
       onCreated(job);
       setTarget("");
       setFile(undefined);
-      setEntitled(false);
       setReplace(false);
       if (input.current) input.current.value = "";
     }, "Request added to the queue.");
@@ -45,7 +43,7 @@ export function RequestForm({
       </div>
       <h2>What are we decrypting?</h2>
       <p className="muted">
-        Use an installed app, your App Store account, or a legally obtained IPA.
+        Use an installed app, your App Store account, or an IPA file.
       </p>
       <fieldset className="source-tabs" aria-label="App source">
         {JOB_SOURCES.map(([value, label]) => (
@@ -86,9 +84,20 @@ export function RequestForm({
               spellCheck={false}
             />
             <p className="field-help">
-              {source === "installed"
-                ? "Uses the existing installation. The app stays on your device."
-                : "Downloads through your configured Apple account."}
+              {source === "installed" ? (
+                <>
+                  Uses the existing installation. The app stays on your device.{" "}
+                  <a
+                    href="https://iosbundleidfinder.vercel.app/"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Find an app&apos;s bundle ID ↗
+                  </a>
+                </>
+              ) : (
+                "Downloads through your configured Apple account."
+              )}
             </p>
           </>
         ) : (
@@ -119,15 +128,6 @@ export function RequestForm({
             requests are available.
           </p>
         )}
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={entitled}
-            onChange={(e) => setEntitled(e.target.checked)}
-            required
-          />
-          <span>I am legally entitled to obtain and decrypt this app.</span>
-        </label>
         {source !== "installed" && (
           <label className="check">
             <input
@@ -148,7 +148,6 @@ export function RequestForm({
           disabled={
             busy ||
             !status ||
-            !entitled ||
             (source !== "installed" && !replace) ||
             (source === "app-store" && !status.appleEnabled)
           }

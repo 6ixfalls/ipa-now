@@ -68,7 +68,7 @@ func request(h http.Handler, method, path, body string) *httptest.ResponseRecord
 }
 func create(t *testing.T, h http.Handler) jobs.Job {
 	t.Helper()
-	rec := request(h, "POST", "/api/jobs", `{"target":"com.example.app","source":"installed","entitled":true}`)
+	rec := request(h, "POST", "/api/jobs", `{"target":"com.example.app","source":"installed"}`)
 	if rec.Code != 202 {
 		t.Fatal(rec.Code, rec.Body.String())
 	}
@@ -157,7 +157,7 @@ func TestEndToEndSuccessFailureRetryCancellation(t *testing.T) {
 func TestInputAndOriginBoundaries(t *testing.T) {
 	h, _, _, _ := harness(t)
 	for _, target := range []string{"../file.ipa", "https://evil.example/id123", "http://apps.apple.com/us/app/example/id123", "https://apps.apple.com.evil/app/id123", "com.example;id", "file:///etc/passwd", "123"} {
-		body, _ := json.Marshal(map[string]any{"target": target, "source": "installed", "entitled": true})
+		body, _ := json.Marshal(map[string]any{"target": target, "source": "installed"})
 		if rec := request(h, "POST", "/api/jobs", string(body)); rec.Code != 400 {
 			t.Fatal("unsafe target accepted", target, rec.Code)
 		}
@@ -175,7 +175,7 @@ func TestInputAndOriginBoundaries(t *testing.T) {
 	if rec.Code != 403 {
 		t.Fatal("cross origin accepted")
 	}
-	for _, body := range []string{`{"target":"com.example.app","source":"installed","entitled":true,"password":"x"}`, `{} {}`, strings.Repeat("x", 5000)} {
+	for _, body := range []string{`{"target":"com.example.app","source":"installed","password":"x"}`, `{} {}`, strings.Repeat("x", 5000)} {
 		rec = request(h, "POST", "/api/jobs", body)
 		if rec.Code != 400 {
 			t.Fatal("bad body accepted", rec.Code)
@@ -188,7 +188,7 @@ func TestReverseProxyHostAndOriginBoundaries(t *testing.T) {
 	s.AllowedHosts = []string{"ipa.example.com"}
 	s.AllowedOrigin = "https://ipa.example.com"
 
-	r := httptest.NewRequest("POST", "http://ipa.example.com/api/jobs", strings.NewReader(`{"target":"com.example.app","source":"installed","entitled":true}`))
+	r := httptest.NewRequest("POST", "http://ipa.example.com/api/jobs", strings.NewReader(`{"target":"com.example.app","source":"installed"}`))
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("X-IPA-Now", "1")
 	r.Header.Set("Origin", "https://ipa.example.com")
@@ -225,7 +225,6 @@ func TestUploadValidationSizeAndCleanup(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			r := httptest.NewRequest("POST", "/api/uploads", bytes.NewReader(test.body))
 			r.Header.Set("X-IPA-Now", "1")
-			r.Header.Set("X-IPA-Entitled", "true")
 			r.Header.Set("X-IPA-Allow-Replacement", "true")
 			r.Header.Set("Content-Type", "application/octet-stream")
 			rec := httptest.NewRecorder()

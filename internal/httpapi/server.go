@@ -179,14 +179,9 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Target           string `json:"target"`
 		Source           string `json:"source"`
-		Entitled         bool   `json:"entitled"`
 		AllowReplacement bool   `json:"allowReplacement"`
 	}
 	if !decode(w, r, &body) {
-		return
-	}
-	if !body.Entitled {
-		problem(w, 400, "entitlement_required", "Confirm that you are entitled to obtain and decrypt this app.")
 		return
 	}
 	target, e := ValidateTarget(body.Target, body.Source)
@@ -212,8 +207,8 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.uploadMu.Unlock()
-	if r.Header.Get("X-IPA-Entitled") != "true" || r.Header.Get("X-IPA-Allow-Replacement") != "true" {
-		problem(w, 400, "acknowledgement_required", "Confirm entitlement and device replacement/uninstall policy.")
+	if r.Header.Get("X-IPA-Allow-Replacement") != "true" {
+		problem(w, 400, "acknowledgement_required", "Confirm the device replacement and automatic uninstall policy.")
 		return
 	}
 	media, _, e := mime.ParseMediaType(r.Header.Get("Content-Type"))

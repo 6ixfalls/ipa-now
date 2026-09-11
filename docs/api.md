@@ -8,8 +8,8 @@ Every mutation requires `X-IPA-Now: 1`. JSON mutations require `Content-Type: ap
 | --- | --- |
 | `GET /api/status` | `{device:{cleanupRequired,activeJob?,reason?},authJob,appleEnabled,maxUploadBytes,queueLimit,cleanupReviewRequired}` |
 | `GET /api/jobs` | Latest 200 jobs, newest first; empty array when there are none |
-| `POST /api/jobs` | JSON `{target,source,entitled,allowReplacement?}`; source is `installed` or `app-store`; returns `202` with job |
-| `POST /api/uploads` | Raw IPA bytes with `application/octet-stream`, `X-IPA-Entitled: true`, `X-IPA-Allow-Replacement: true`; returns `202` with job |
+| `POST /api/jobs` | JSON `{target,source,allowReplacement?}`; source is `installed` or `app-store`; returns `202` with job |
+| `POST /api/uploads` | Raw IPA bytes with `application/octet-stream` and `X-IPA-Allow-Replacement: true`; returns `202` with job |
 | `GET /api/jobs/{id}` | One job |
 | `POST /api/jobs/{id}/cancel` | JSON `{}`; `202 {cancelRequested:true}`; persists cancellation until worker cleanup; cleaning/terminal jobs return `409` |
 | `POST /api/jobs/{id}/auth-code` | JSON `{code:"123456"}` scoped to the active in-memory challenge; `204` |
@@ -53,7 +53,7 @@ Typical errors: `400` invalid target/archive/JSON/acknowledgement, `403` origin/
 curl http://127.0.0.1:8080/api/jobs \
   -H 'X-IPA-Now: 1' \
   -H 'Content-Type: application/json' \
-  --data '{"target":"com.example.app","source":"installed","entitled":true}'
+  --data '{"target":"com.example.app","source":"installed"}'
 ```
 
-Closing the connection after the `202` response does not cancel the job. Poll `/api/jobs` or the individual job for persisted state. To cancel, POST `{}` to its cancellation route. For uploads, use `--data-binary @/your/private/file.ipa` with the documented upload headers and only for an IPA you are legally entitled to decrypt.
+Closing the connection after the `202` response does not cancel the job. Poll `/api/jobs` or the individual job for persisted state. To cancel, POST `{}` to its cancellation route. For uploads, use `--data-binary @/your/private/file.ipa` with the documented upload headers.

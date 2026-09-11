@@ -21,7 +21,7 @@ import (
 func TestRealDevice(t *testing.T) {
 	target := os.Getenv("IPA_NOW_INTEGRATION_TARGET")
 	if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*(\.[A-Za-z0-9][A-Za-z0-9-]*)+$`).MatchString(target) {
-		t.Fatal("IPA_NOW_INTEGRATION_TARGET must name an installed app you are entitled to decrypt")
+		t.Fatal("IPA_NOW_INTEGRATION_TARGET must name an installed app")
 	}
 	c, e := config.Load()
 	if e != nil {
